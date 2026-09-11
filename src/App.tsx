@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import MainEditor from './components/MainEditor';
 import { ExportModal } from './components/ExportModal';
 import RemuxModal from './components/RemuxModal';
@@ -29,7 +29,7 @@ function App() {
       <MainEditor 
         onOpenExport={handleOpenExport}
         onOpenRemux={handleOpenRemux}
-        onVideoStateChange={(src, duration, inT, outT) => {
+        onVideoStateChange={(src, _duration, inT, outT) => {
           setVideoSrc(src);
           setInTime(inT);
           setOutTime(outT);

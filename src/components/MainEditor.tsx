@@ -4,21 +4,13 @@ import VideoPreview from './VideoPreview';
 import Timeline from './Timeline';
 import Sidebar from './Sidebar';
 import { X } from 'lucide-react';
-import type { VideoInfo, ProjectData, EncoderPrefs } from '../types/electron';
+import type { VideoInfo, ProjectData, ProjectDocument, EncoderPrefs } from '../types/electron';
+import { unwrapIpc } from '../utils/ipc';
 
 interface MainEditorProps {
   onOpenExport: () => void;
   onOpenRemux: () => void;
   onVideoStateChange: (src: string, duration: number, inTime: number, outTime: number) => void;
-}
-
-/* ---------------- Debounce ---------------- */
-function useDebounce<T extends (...args: unknown[]) => void>(callback: T, delay: number): T {
-  const timeoutRef = React.useRef<ReturnType<typeof setTimeout>>();
-  return React.useCallback((...args: Parameters<T>) => {
-    if (timeoutRef.current) clearTimeout(timeoutRef.current);
-    timeoutRef.current = setTimeout(() => callback(...args), delay);
-  }, [callback, delay]) as T;
 }
 
 /* ---------------- Drag/drop helpers ---------------- */
@@ -83,6 +75,14 @@ const DEFAULT_ENCODER_PREFS: EncoderPrefs = {
   copyAudio: true
 };
 
+interface SaveSnapshot {
+  path: string;
+  signature: string;
+  data: ProjectData;
+  session: number;
+  temporary: boolean;
+}
+
 const DEFAULT_SEGMENT_ID = 'segment-1';
 
 const createProjectIdentity = (project?: Partial<ProjectData>) => ({
@@ -98,8 +98,8 @@ const MainEditor: React.FC<MainEditorProps> = ({
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [inTime, setInTime] = useState(0);
-  const [outTime, setOutTime] = useState(600);
-  const [duration, setDuration] = useState(600);
+  const [outTime, setOutTime] = useState(0);
+  const [duration, setDuration] = useState(0);
   const [videoSrc, setVideoSrc] = useState<string>('');
   const [videoInfo, setVideoInfo] = useState<VideoInfo | null>(null);
   const [isLoadingVideo, setIsLoadingVideo] = useState(false);
@@ -111,11 +111,13 @@ const MainEditor: React.FC<MainEditorProps> = ({
   const [projectIdentity, setProjectIdentity] = useState(() => createProjectIdentity());
   const [encoderPrefs, setEncoderPrefs] = useState<EncoderPrefs>(DEFAULT_ENCODER_PREFS);
   const [segments, setSegments] = useState<ProjectData['segments']>([
-    { id: DEFAULT_SEGMENT_ID, start: 0, end: 600, name: 'Main segment' }
+    { id: DEFAULT_SEGMENT_ID, start: 0, end: 0, name: 'Main segment' }
   ]);
   const [activeSegmentId, setActiveSegmentId] = useState<string>(DEFAULT_SEGMENT_ID);
   const [deleteProjectOnExit, setDeleteProjectOnExit] = useState(false);
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
+  const [projectError, setProjectError] = useState('');
+  const [saveRevision, setSaveRevision] = useState(0);
   const [isTempImport, setIsTempImport] = useState(false);
   const [showSaveBanner, setShowSaveBanner] = useState(false);
   const [isSaveBannerDismissed, setIsSaveBannerDismissed] = useState(false);
@@ -127,24 +129,34 @@ const MainEditor: React.FC<MainEditorProps> = ({
   /* ---- Guard so <video>.onloadedmetadata doesn't overwrite restored state ---- */
   const suppressNextMetadataInit = React.useRef(false);
   const lastSavedSignatureRef = React.useRef<string>('');
+  const sessionRef = React.useRef(0);
+  const latestSave = React.useRef<SaveSnapshot | null>(null);
+  const autosaveTimer = React.useRef<ReturnType<typeof setTimeout>>();
+  const pendingSaves = React.useRef(new Set<Promise<boolean>>());
+  const transitionRef = React.useRef(false);
+  const allowClose = React.useRef(false);
 
-  const buildSignature = useCallback((sigIn: number, sigOut: number, sigPrefs: EncoderPrefs) => {
+  const buildSignature = useCallback((sigIn: number, sigOut: number, sigPrefs: EncoderPrefs, sigSegments = segments, sigActiveId = activeSegmentId) => {
     // Intentionally excludes playhead/currentTime to avoid autosaving constantly during playback.
     return JSON.stringify({
       inTime: Number(sigIn),
       outTime: Number(sigOut),
       encoderPrefs: sigPrefs,
-      segments,
-      activeSegmentId
+      segments: sigSegments,
+      activeSegmentId: sigActiveId
     });
   }, [activeSegmentId, segments]);
 
   const resetEditorState = useCallback(() => {
+    sessionRef.current++;
+    latestSave.current = null;
+    clearTimeout(autosaveTimer.current);
+    setProjectError('');
     setIsPlaying(false);
     setCurrentTime(0);
     setInTime(0);
-    setOutTime(600);
-    setDuration(600);
+    setOutTime(0);
+    setDuration(0);
     setVideoSrc('');
     setVideoInfo(null);
     setIsLoadingVideo(true);
@@ -152,7 +164,7 @@ const MainEditor: React.FC<MainEditorProps> = ({
     setCurrentProjectPath('');
     setProjectIdentity(createProjectIdentity());
     setEncoderPrefs(DEFAULT_ENCODER_PREFS);
-    setSegments([{ id: DEFAULT_SEGMENT_ID, start: 0, end: 600, name: 'Main segment' }]);
+    setSegments([{ id: DEFAULT_SEGMENT_ID, start: 0, end: 0, name: 'Main segment' }]);
     setActiveSegmentId(DEFAULT_SEGMENT_ID);
     setDeleteProjectOnExit(false);
     setHasUnsavedChanges(false);
@@ -163,28 +175,39 @@ const MainEditor: React.FC<MainEditorProps> = ({
     lastSavedSignatureRef.current = '';
   }, []);
 
-  const applyProjectData = useCallback((project: ProjectData, info: VideoInfo, projectPath: string) => {
-    const firstSegment = project.segments?.[0];
+  const applyProjectData = useCallback((project: ProjectDocument, info: VideoInfo, projectPath: string) => {
+    const bound = (value: number | undefined, fallback: number) => typeof value === 'number' && Number.isFinite(value) ? Math.max(0, Math.min(info.duration, value)) : fallback;
+    const ids = new Set<string>();
+    const normalized = (Array.isArray(project.segments) ? project.segments : []).filter(s => s && typeof s === 'object').map((segment, index) => {
+      let id = typeof segment.id === 'string' && segment.id && !ids.has(segment.id) ? segment.id : `restored-${index}`;
+      while (ids.has(id)) id += '-copy';
+      ids.add(id);
+      const start = bound(segment.start, 0);
+      return { ...segment, id, start, end: Math.max(start, bound(segment.end, info.duration)) };
+    });
+    const firstSegment = normalized[0];
     setProjectIdentity(createProjectIdentity(project));
-    const nextIn = project.selection?.inTime ?? firstSegment?.start ?? 0;
-    const nextOut = project.selection?.outTime ?? firstSegment?.end ?? info.duration;
+    const active = normalized.find(s => s.id === project.activeSegmentId) || firstSegment;
+    const nextIn = bound(project.selection?.inTime, active?.start ?? 0);
+    const nextOut = Math.max(nextIn, bound(project.selection?.outTime, active?.end ?? info.duration));
     const nextPrefs = project.encoderPrefs || DEFAULT_ENCODER_PREFS;
-    const nextSegments = (project.segments?.length ? project.segments : [{
+    const nextSegments = (normalized.length ? normalized : [{
       id: DEFAULT_SEGMENT_ID,
       start: nextIn,
       end: nextOut,
       name: 'Main segment'
     }]);
-    const nextActiveId = project.activeSegmentId || nextSegments[0]?.id || DEFAULT_SEGMENT_ID;
+    const nextActiveId = active?.id || nextSegments[0].id;
+    const reconciled = nextSegments.map(s => s.id === nextActiveId ? { ...s, start: nextIn, end: nextOut } : s);
     setInTime(nextIn);
     setOutTime(nextOut);
-    setCurrentTime(project.playhead ?? 0);
+    setCurrentTime(bound(project.playhead, 0));
     setEncoderPrefs(nextPrefs);
-    setSegments(nextSegments);
+    setSegments(reconciled);
     setActiveSegmentId(nextActiveId);
     setCurrentProjectPath(projectPath);
     suppressNextMetadataInit.current = true;
-    lastSavedSignatureRef.current = buildSignature(nextIn, nextOut, nextPrefs);
+    lastSavedSignatureRef.current = buildSignature(nextIn, nextOut, nextPrefs, reconciled, nextActiveId);
     setHasUnsavedChanges(false);
   }, [buildSignature]);
 
@@ -205,19 +228,59 @@ const MainEditor: React.FC<MainEditorProps> = ({
     activeSegmentId
   }), [activeSegmentId, currentTime, currentVideoPath, duration, encoderPrefs, inTime, outTime, projectIdentity.createdAt, projectIdentity.version, segments, videoInfo]);
 
-  const persistProject = useCallback(async (projectPath?: string) => {
-    if (!window.electronAPI) return { success: false, error: 'Electron API not available' };
-    const pathToSave = projectPath || currentProjectPath;
-    if (!pathToSave) return { success: false, error: 'Missing project path' };
-
-    const defaultProjectPath = await window.electronAPI.projectDefaultPath(currentVideoPath);
-    return pathToSave === defaultProjectPath
-      ? window.electronAPI.projectSaveSidecar(currentVideoPath, createProjectData())
-      : window.electronAPI.projectSaveFile(pathToSave, createProjectData());
-  }, [createProjectData, currentProjectPath, currentVideoPath]);
-
-  /* ---------------- Autosave (debounced) ---------------- */
   const currentSignature = buildSignature(inTime, outTime, encoderPrefs);
+  if (isInitialized && currentVideoPath) {
+    latestSave.current = {
+      path: currentProjectPath, data: createProjectData(), signature: currentSignature,
+      session: sessionRef.current, temporary: isTempImport
+    };
+  }
+
+  const persistProject = useCallback((projectPath?: string): Promise<boolean> => {
+    clearTimeout(autosaveTimer.current);
+    const snapshot = latestSave.current;
+    if (!snapshot || snapshot.temporary) return Promise.resolve(true);
+    const destination = projectPath || snapshot.path;
+    if (!destination) return Promise.resolve(false);
+    const task = (async () => {
+      try {
+        const result = await window.electronAPI.projectSaveFile(destination, snapshot.data);
+        if (!result.success) throw new Error(result.error || 'Project save failed.');
+        const latest = latestSave.current;
+        if (latest && latest.session === snapshot.session && latest.path === snapshot.path) {
+          if (destination !== snapshot.path) {
+            latestSave.current = { ...latest, path: destination };
+            setCurrentProjectPath(destination);
+          }
+          // Track what reached disk, even if the user edited or reverted meanwhile.
+          lastSavedSignatureRef.current = snapshot.signature;
+          setHasUnsavedChanges(latest.signature !== snapshot.signature);
+          setSaveRevision(revision => revision + 1);
+          setProjectError('');
+        }
+        return true;
+      } catch (error) {
+        if (snapshot.session === sessionRef.current) {
+          setProjectError(error instanceof Error ? error.message : String(error));
+          setHasUnsavedChanges(true);
+        }
+        return false;
+      }
+    })();
+    pendingSaves.current.add(task);
+    void task.then(() => pendingSaves.current.delete(task));
+    return task;
+  }, []);
+
+  const flushProject = useCallback(async () => {
+    clearTimeout(autosaveTimer.current);
+    while (true) {
+      await Promise.all([...pendingSaves.current]);
+      const snapshot = latestSave.current;
+      if (!snapshot || !snapshot.path || snapshot.temporary || snapshot.signature === lastSavedSignatureRef.current) return true;
+      if (!await persistProject()) return false;
+    }
+  }, [persistProject]);
 
   const clampTime = useCallback((t: number) => {
     const x = Number(t);
@@ -247,61 +310,53 @@ const MainEditor: React.FC<MainEditorProps> = ({
       return;
     }
 
-    const minGap = 0.001;
-    const boundedOut = Math.max(seg.end, nextIn + minGap);
+    const nextOut = Math.max(nextIn, clampTime(outTime));
     setInTime(nextIn);
-    // Expand/shrink only the start; keep end unless it would invert.
-    if (outTime < nextIn + minGap) setOutTime(boundedOut);
-    setActiveSegmentRange(nextIn, Math.max(outTime, nextIn + minGap));
+    setOutTime(nextOut);
+    setActiveSegmentRange(nextIn, nextOut);
   }, [activeSegmentId, clampTime, duration, outTime, segments, setActiveSegmentRange]);
 
   const setOutForActive = useCallback((nextOutRaw: number) => {
-    const seg = segments.find(s => s.id === activeSegmentId);
-    if (!seg) return;
-    const minGap = 0.001;
-    const nextOut = clampTime(nextOutRaw);
-    const boundedOut = Math.max(nextOut, inTime + minGap);
-    setOutTime(boundedOut);
-    setActiveSegmentRange(inTime, boundedOut);
+    if (!segments.some(s => s.id === activeSegmentId)) return;
+    const nextOut = Math.max(inTime, clampTime(nextOutRaw));
+    setOutTime(nextOut);
+    setActiveSegmentRange(inTime, nextOut);
   }, [activeSegmentId, clampTime, inTime, segments, setActiveSegmentRange]);
 
-  const autosaveNow = useCallback(async () => {
-    if (!currentProjectPath || !currentVideoPath || !window.electronAPI || isTempImport) return;
-    try {
-      const result = await persistProject(currentProjectPath);
-      if (result.success) {
-        setHasUnsavedChanges(false);
-        lastSavedSignatureRef.current = currentSignature;
-        console.log('Project autosaved:', result.path);
-      } else {
-        console.error('Autosave failed:', result.error);
-      }
-    } catch (error) {
-      console.error('Autosave error:', error);
+  useEffect(() => {
+    if (!isInitialized || isTempImport || !currentProjectPath || !currentVideoPath) return;
+    if (currentSignature === lastSavedSignatureRef.current) return;
+    setHasUnsavedChanges(true);
+    if (!transitionRef.current) {
+      autosaveTimer.current = setTimeout(() => { void persistProject(); }, 300);
     }
-  }, [currentProjectPath, currentSignature, currentVideoPath, isTempImport, persistProject]);
-
-  const debouncedAutosave = useDebounce(autosaveNow, 300);
+    return () => clearTimeout(autosaveTimer.current);
+  }, [currentSignature, currentProjectPath, currentVideoPath, isInitialized, isTempImport, persistProject, saveRevision]);
 
   useEffect(() => {
-    if (
-      isInitialized &&
-      !isTempImport &&
-      currentProjectPath &&
-      currentVideoPath &&
-      (inTime !== 0 || outTime !== duration)
-    ) {
-      if (currentSignature !== lastSavedSignatureRef.current) {
-        setHasUnsavedChanges(true);
-        debouncedAutosave();
-      }
-    }
-  }, [currentSignature, debouncedAutosave, currentProjectPath, currentVideoPath, duration, inTime, isInitialized, isTempImport, outTime]);
+    const beforeClose = (event: BeforeUnloadEvent) => {
+      if (allowClose.current) return;
+      event.preventDefault();
+      event.returnValue = '';
+      if (transitionRef.current) return;
+      transitionRef.current = true;
+      void flushProject().then(saved => {
+        transitionRef.current = false;
+        if (saved) {
+          allowClose.current = true;
+          window.close();
+        }
+      });
+    };
+    window.addEventListener('beforeunload', beforeClose);
+    return () => window.removeEventListener('beforeunload', beforeClose);
+  }, [flushProject]);
 
   /* ---------------- Delete-on-exit sync ---------------- */
   useEffect(() => {
     if (window.electronAPI && currentProjectPath && !isTempImport) {
-      window.electronAPI.projectSetDeleteOnExit(currentProjectPath, deleteProjectOnExit);
+      void window.electronAPI.projectSetDeleteOnExit(currentProjectPath, deleteProjectOnExit)
+        .then(unwrapIpc).catch(error => setProjectError(String(error)));
     }
   }, [currentProjectPath, deleteProjectOnExit, isTempImport]);
 
@@ -310,41 +365,47 @@ const MainEditor: React.FC<MainEditorProps> = ({
     if (!window.electronAPI) return;
     try {
       const result = await window.electronAPI.projectOpenSidecar(projectPath);
-      if (result.success && result.data?.sourceVideo?.path) {
+      if (!result.success) throw new Error(result.error);
+      if (result.data?.sourceVideo?.path) {
         await loadFromPath(result.data.sourceVideo.path, {
           projectData: result.data,
           projectPath
         });
       } else {
-        console.error('Failed to load project:', result.error);
+        throw new Error('Project does not contain a source video path.');
       }
     } catch (error) {
       console.error('Load project error:', error);
+      setProjectError(error instanceof Error ? error.message : String(error));
     }
   };
 
   /* ---------------- Unified "open video by path" ---------------- */
   const loadFromPath = async (
     filePath: string,
-    options?: { projectData?: ProjectData; projectPath?: string }
+    options?: { projectData?: ProjectDocument; projectPath?: string }
   ) => {
     if (!window.electronAPI) return;
 
+    if (transitionRef.current) return;
+    transitionRef.current = true;
+    if (!await flushProject()) { transitionRef.current = false; return; }
     resetEditorState();
 
     try {
       // Check if temp import
-      const isTemp = await window.electronAPI.isTempImport(filePath);
+      const isTemp = unwrapIpc(await window.electronAPI.isTempImport(filePath));
       setIsTempImport(isTemp);
 
       // Get video info with ffprobe
-      const info = await window.electronAPI.getVideoInfo(filePath);
+      const info = unwrapIpc(await window.electronAPI.getVideoInfo(filePath));
+      if (!Number.isFinite(info.duration) || info.duration <= 0) throw new Error('Could not determine a valid video duration.');
+      setSegments([{ id: DEFAULT_SEGMENT_ID, start: 0, end: info.duration, name: 'Main segment' }]);
       setVideoInfo(info);
       setDuration(info.duration);
       setInTime(0);
       setOutTime(info.duration);
       setCurrentTime(0);
-      setVideoSrc(`safe-file:${filePath}`);
       setCurrentVideoPath(filePath);
 
       if (isTemp) {
@@ -359,16 +420,15 @@ const MainEditor: React.FC<MainEditorProps> = ({
           applyProjectData(explicitProject, info, explicitProjectPath);
         } else {
           // Permanent file: check for existing project
-          const projectPath = await window.electronAPI.projectDefaultPath(filePath);
-          const exists = await window.electronAPI.projectExists(projectPath);
+          const projectPath = unwrapIpc(await window.electronAPI.projectDefaultPath(filePath));
+          const exists = unwrapIpc(await window.electronAPI.projectExists(projectPath));
 
           if (exists) {
             const open = await window.electronAPI.projectOpenSidecar(projectPath);
-            if (open.success && open.data) {
+            if (open.success) {
               applyProjectData(open.data, info, projectPath);
             } else {
-              setProjectIdentity(createProjectIdentity());
-              setCurrentProjectPath(projectPath);
+              throw new Error(open.error || 'Project could not be read; it has not been overwritten.');
             }
           } else {
             setProjectIdentity(createProjectIdentity());
@@ -376,9 +436,12 @@ const MainEditor: React.FC<MainEditorProps> = ({
           }
         }
       }
+      setVideoSrc(`safe-file:${filePath}`);
     } catch (error) {
+      setProjectError(error instanceof Error ? error.message : String(error));
       console.error('Failed to load video:', error);
     } finally {
+      transitionRef.current = false;
       setIsLoadingVideo(false);
       setIsInitialized(true);
     }
@@ -386,55 +449,76 @@ const MainEditor: React.FC<MainEditorProps> = ({
 
   /* ---------------- Save helpers ---------------- */
   const saveProject = useCallback(async (projectPath?: string) => {
-    const pathToSave = projectPath || currentProjectPath;
-    if (!pathToSave) return;
-    try {
-      const result = await persistProject(pathToSave);
-      if (result.success) {
-        setCurrentProjectPath(result.path || pathToSave);
-        setHasUnsavedChanges(false);
-        lastSavedSignatureRef.current = currentSignature;
-        console.log('Project saved:', result.path);
-      } else {
-        console.error('Save failed:', result.error);
-      }
-    } catch (error) {
-      console.error('Save project error:', error);
-    }
-  }, [currentProjectPath, currentSignature, persistProject]);
+    await persistProject(projectPath);
+  }, [persistProject]);
 
   const handleSaveProjectAs = useCallback(async () => {
     if (!window.electronAPI) return;
-
+    if (!currentVideoPath || transitionRef.current) return;
+    transitionRef.current = true;
+    clearTimeout(autosaveTimer.current);
+    let failed = false;
+    try {
+    await Promise.all([...pendingSaves.current]);
     if (isTempImport) {
       // Temporary file: Save Video & Project
-      const dstVideoPath = await window.electronAPI.showSaveVideoDialogForSource(currentVideoPath);
+      const dstVideoPath = unwrapIpc(await window.electronAPI.showSaveVideoDialogForSource(currentVideoPath));
       if (dstVideoPath) {
         try {
-          await window.electronAPI.moveFile(currentVideoPath, dstVideoPath);
-          const result = await window.electronAPI.projectSaveSidecar(dstVideoPath, createProjectData());
+          setProjectError('');
+          const projectPath = unwrapIpc(await window.electronAPI.projectDefaultPath(dstVideoPath));
+          const data = latestSave.current?.data || createProjectData();
+          const snapshot = latestSave.current;
+          const moved = await window.electronAPI.moveFile(currentVideoPath, dstVideoPath);
+          if (!moved.success) throw new Error(moved.error || 'Could not save the temporary video.');
+          const permanentPath = moved.data.dst || dstVideoPath;
+          setIsTempImport(false);
+          setCurrentVideoPath(permanentPath);
+          setCurrentProjectPath(projectPath);
+          setShowSaveBanner(false);
+          setHasUnsavedChanges(true);
+          suppressNextMetadataInit.current = true;
+          setVideoSrc(`safe-file:${permanentPath}`);
+          const latest = latestSave.current;
+          if (latest) latestSave.current = { ...latest, path: projectPath, temporary: false, data: { ...latest.data, sourceVideo: { ...latest.data.sourceVideo, path: permanentPath } } };
+          const result = await window.electronAPI.projectSaveSidecar(permanentPath, {
+            ...data, sourceVideo: { ...data.sourceVideo, path: permanentPath }
+          });
           if (result.success) {
-            setIsTempImport(false);
-            setCurrentVideoPath(dstVideoPath);
-            setCurrentProjectPath(result.path || '');
-            setShowSaveBanner(false);
-            setHasUnsavedChanges(false);
-            setVideoSrc(`safe-file:${dstVideoPath}`);
-            console.log('Video and project saved:', dstVideoPath, result.path);
+            setCurrentProjectPath(result.data.path || projectPath);
+            if (snapshot) {
+              lastSavedSignatureRef.current = snapshot.signature;
+              setHasUnsavedChanges(latestSave.current?.signature !== snapshot.signature);
+            }
+            console.log('Video and project saved:', dstVideoPath, result.data.path);
+          } else {
+            throw new Error(`Video saved, but project save failed: ${result.error || 'Unknown error'}. Use Save Project to retry.`);
           }
         } catch (error) {
+          failed = true;
           console.error('Failed to save video and project:', error);
+          setProjectError(error instanceof Error ? error.message : String(error));
         }
       }
     } else {
       // Permanent file: choose a project file location
       const suggested = currentProjectPath || 'project.clipforge';
-      const projectPath = await window.electronAPI.showSaveProjectDialog(suggested);
+      const projectPath = unwrapIpc(await window.electronAPI.showSaveProjectDialog(suggested));
       if (projectPath) {
-        await saveProject(projectPath);
+        failed = !await persistProject(projectPath);
       }
     }
-  }, [createProjectData, currentProjectPath, currentVideoPath, isTempImport, saveProject]);
+    } catch (error) {
+      failed = true;
+      setProjectError(error instanceof Error ? error.message : String(error));
+    } finally {
+      transitionRef.current = false;
+      const latest = latestSave.current;
+      if (!failed && latest && !latest.temporary && latest.signature !== lastSavedSignatureRef.current) {
+        autosaveTimer.current = setTimeout(() => { void persistProject(); }, 300);
+      }
+    }
+  }, [createProjectData, currentProjectPath, currentVideoPath, isTempImport, persistProject]);
 
   /* ---------------- Menu actions ---------------- */
   const handleSaveProject = useCallback(() => {
@@ -445,8 +529,10 @@ const MainEditor: React.FC<MainEditorProps> = ({
 
   const handleOpenProject = async () => {
     if (!window.electronAPI) return;
-    const projectPath = await window.electronAPI.showOpenProjectDialog();
-    if (projectPath) await loadProject(projectPath);
+    try {
+      const projectPath = unwrapIpc(await window.electronAPI.showOpenProjectDialog());
+      if (projectPath) await loadProject(projectPath);
+    } catch (error) { setProjectError(error instanceof Error ? error.message : String(error)); }
   };
 
   const handleToggleDeleteProjectOnExit = () => setDeleteProjectOnExit(!deleteProjectOnExit);
@@ -479,21 +565,15 @@ const MainEditor: React.FC<MainEditorProps> = ({
   }, [segments]);
 
   const handleDeleteSegment = useCallback((id: string) => {
-    setSegments(prev => {
-      if (prev.length <= 1) return prev;
-      const next = prev.filter(s => s.id !== id);
-      // If we deleted the active one, pick the first remaining segment.
-      if (id === activeSegmentId) {
-        const first = next[0];
-        if (first) {
-          setActiveSegmentId(first.id);
-          setInTime(first.start);
-          setOutTime(first.end);
-        }
-      }
-      return next;
-    });
-  }, [activeSegmentId]);
+    if (segments.length <= 1) return;
+    const next = segments.filter(s => s.id !== id);
+    setSegments(next);
+    if (id === activeSegmentId) {
+      setActiveSegmentId(next[0].id);
+      setInTime(next[0].start);
+      setOutTime(next[0].end);
+    }
+  }, [activeSegmentId, segments]);
 
   /* ---------------- Parent sync ---------------- */
   useEffect(() => {
@@ -553,22 +633,16 @@ const MainEditor: React.FC<MainEditorProps> = ({
 
   const handleTimeUpdate = (time: number) => setCurrentTime(time);
 
-  const handleLoadedMetadata = (videoDuration: number) => {
-    setDuration(videoDuration);
-    // Guard: if we just restored a project, do not override its selection/playhead
-    if (suppressNextMetadataInit.current) {
-      suppressNextMetadataInit.current = false;
-      return;
-    }
-    setOutTime(videoDuration);
-    setCurrentTime(0);
+  const handleLoadedMetadata = () => {
+    // Probed duration and restored ranges are authoritative; browser metadata must not reset them.
+    suppressNextMetadataInit.current = false;
   };
 
   /* ---------------- Open video via dialog ---------------- */
   const handleLoadVideo = async () => {
     if (!window.electronAPI) return;
     try {
-      const filePath = await window.electronAPI.openVideoDialog();
+      const filePath = unwrapIpc(await window.electronAPI.openVideoDialog());
       if (filePath) await loadFromPath(filePath);
     } catch (error) {
       console.error('Failed to open video:', error);
@@ -593,7 +667,7 @@ const MainEditor: React.FC<MainEditorProps> = ({
         const buf = new Uint8Array(await f.arrayBuffer());
         const res = await window.electronAPI.importBlob(buf, f.name);
         if (res.success) {
-          p = res.tempPath;
+          p = res.data.tempPath;
         } else {
           console.error('Failed to import blob:', res.error);
           return;
@@ -681,6 +755,8 @@ const MainEditor: React.FC<MainEditorProps> = ({
           Unsaved changes
         </div>
       )}
+
+      {projectError && <div role="alert" className="absolute top-24 left-4 right-4 bg-red-900 text-white p-3 rounded">{projectError}</div>}
 
       {showSaveBanner && !isSaveBannerDismissed && (
         <div className="absolute top-16 left-1/2 transform -translate-x-1/2 bg-blue-600 text-white px-6 py-3 rounded-lg shadow-lg flex items-center space-x-4">

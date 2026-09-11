@@ -1,48 +1,47 @@
+export type IpcResult<T> = { success: true; data: T } | { success: false; error: string; code: string };
+
+export type ProjectDocument = Partial<ProjectData>;
+
 export interface ElectronAPI {
   // File operations
-  openVideoDialog: () => Promise<string | null>;
-  showOpenProjectDialog: () => Promise<string | null>;
-  showSaveProjectDialog: (defaultPath?: string) => Promise<string | null>;
-  showSaveVideoDialogForSource: (srcPath: string) => Promise<string | null>;
-  selectOutputDirectory: () => Promise<string | null>;
-  selectMkvFiles: () => Promise<string[]>;
-  showSaveVideoDialog: (defaultPath?: string) => Promise<string | null>;
+  openVideoDialog: () => Promise<IpcResult<string | null>>;
+  showOpenProjectDialog: () => Promise<IpcResult<string | null>>;
+  showSaveProjectDialog: (defaultPath?: string) => Promise<IpcResult<string | null>>;
+  showSaveVideoDialogForSource: (srcPath: string) => Promise<IpcResult<string | null>>;
+  selectMkvFiles: () => Promise<IpcResult<string[]>>;
+  showSaveVideoDialog: (defaultPath?: string) => Promise<IpcResult<string | null>>;
   getPathForFile: (file: File) => string | null;
 
   // Video information
-  getVideoInfo: (videoPath: string) => Promise<VideoInfo>;
+  getVideoInfo: (videoPath: string) => Promise<IpcResult<VideoInfo>>;
   
   // Import operations (updated to reflect success/error)
-  importBlob: (bytes: ArrayBuffer, name: string) => Promise<
-    | { success: true; tempPath: string; isTemp: true }
-    | { success: false; error: string }
-  >;
-  isTempImport: (srcPath: string) => Promise<boolean>;
-  moveFile: (src: string, dst: string) => Promise<{ success: boolean; dst?: string; error?: string }>;
+  importBlob: (bytes: ArrayBuffer | Uint8Array, name: string) => Promise<IpcResult<{ tempPath: string; isTemp: true }>>;
+  isTempImport: (srcPath: string) => Promise<IpcResult<boolean>>;
+  moveFile: (src: string, dst: string) => Promise<IpcResult<{ dst: string }>>;
   
   // Export operations
-  exportVideo: (options: ExportOptions) => Promise<{ success: boolean; outputPath: string }>;
+  exportVideo: (options: ExportOptions) => Promise<IpcResult<{ outputPath: string }>>;
   onExportProgress: (callback: (data: ExportProgress) => void) => () => void;
-  removeExportProgressListener: () => void;
   
   // Remux operations
-  remuxVideo: (options: RemuxOptions) => Promise<{ success: boolean; outputPath: string }>;
+  remuxVideo: (options: RemuxOptions) => Promise<IpcResult<{ outputPath: string }>>;
   onRemuxProgress: (callback: (data: RemuxProgress) => void) => () => void;
-  removeRemuxProgressListener: () => void;
   
   // Platform info
   platform: string;
   
   // Project file operations
-  projectDefaultPath: (srcPath: string) => Promise<string>;
-  projectSaveSidecar: (srcPath: string, projectData: ProjectData) => Promise<{ success: boolean; path?: string; error?: string }>;
-  projectSaveFile: (projectPath: string, projectData: ProjectData) => Promise<{ success: boolean; path?: string; error?: string }>;
-  projectOpenSidecar: (projectPath: string) => Promise<{ success: boolean; data?: ProjectData; error?: string }>;
-  projectExists: (projectPath: string) => Promise<boolean>;
-  projectSetDeleteOnExit: (projectPath: string, enabled: boolean) => Promise<boolean>;
+  projectDefaultPath: (srcPath: string) => Promise<IpcResult<string>>;
+  projectSaveSidecar: (srcPath: string, projectData: ProjectData) => Promise<IpcResult<{ path: string }>>;
+  projectSaveFile: (projectPath: string, projectData: ProjectData) => Promise<IpcResult<{ path: string }>>;
+  projectOpenSidecar: (projectPath: string) => Promise<IpcResult<ProjectDocument>>;
+  projectExists: (projectPath: string) => Promise<IpcResult<boolean>>;
+  projectSetDeleteOnExit: (projectPath: string, enabled: boolean) => Promise<IpcResult<boolean>>;
 }
 
 export interface VideoInfo {
+  path: string;
   duration: number;
   size: number;
   bitrate: number;

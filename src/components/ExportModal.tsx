@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { unwrapIpc } from '../utils/ipc';
 import { X, Folder, Play } from 'lucide-react';
 import type { ExportOptions, ExportProgress } from '../types/electron';
 
@@ -55,6 +56,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({
   const [progress, setProgress] = useState(0);
   const [estimatedSize, setEstimatedSize] = useState('~45 MB');
   const [eta, setEta] = useState('');
+  const [exportError, setExportError] = useState('');
 
   useEffect(() => {
     // Calculate estimated output size based on settings
@@ -80,9 +82,11 @@ export const ExportModal: React.FC<ExportModalProps> = ({
     setIsExporting(true);
     setProgress(0);
     setEta('');
+    setExportError('');
 
     let removeProgressListener: (() => void) | null = null;
     try {
+      if (!['mp4', 'mkv'].includes(options.format)) throw new Error('Choose MP4 or MKV for H.264 export.');
       const segmentDuration = Math.max(0, outTime - inTime);
       if (segmentDuration <= 0) {
         console.error('Invalid segment duration');
@@ -128,12 +132,14 @@ export const ExportModal: React.FC<ExportModalProps> = ({
           onClose();
         }, 1000);
       } else {
-        console.error('Export failed:', result.error);
+        console.error('Export failed');
+        setExportError(result.error);
         setIsExporting(false);
         removeProgressListener?.();
       }
     } catch (error) {
       console.error('Export error:', error);
+      setExportError(error instanceof Error ? error.message : String(error));
       setIsExporting(false);
       removeProgressListener?.();
     }
@@ -143,7 +149,9 @@ export const ExportModal: React.FC<ExportModalProps> = ({
     if (!window.electronAPI) return;
     
     const suggested = ensureExt(options.filename, options.format);
-    const result = await window.electronAPI.showSaveVideoDialog(suggested);
+    let result: string | null;
+    try { result = unwrapIpc(await window.electronAPI.showSaveVideoDialog(suggested)); }
+    catch (error) { setExportError(error instanceof Error ? error.message : String(error)); return; }
     if (result) {
       const pickedExt = getExtension(result);
       const pickedBase = stripExtension(getBasename(result));
@@ -180,6 +188,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({
         </div>
 
         <div className="p-6 space-y-6">
+          {exportError && <p role="alert" className="text-sm text-red-400">{exportError}</p>}
           {/* Output Format */}
           <div>
             <label className="block text-sm font-medium text-slate-300 mb-2">
@@ -204,8 +213,6 @@ export const ExportModal: React.FC<ExportModalProps> = ({
             >
               <option value="mp4">MP4</option>
               <option value="mkv">MKV</option>
-              <option value="webm">WebM</option>
-              <option value="avi">AVI</option>
             </select>
           </div>
 

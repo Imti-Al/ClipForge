@@ -18,8 +18,6 @@ interface SidebarProps {
 
 const Sidebar: React.FC<SidebarProps> = ({ 
   videoInfo, 
-  inTime, 
-  outTime, 
   segments,
   activeSegmentId,
   onAddSegment,
