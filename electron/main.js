@@ -4,7 +4,8 @@ import { PROJECT_EXT, sidecarPathForSource } from './projects/paths.js';
 import { createProjectStore } from './projects/store.js';
 import { cleanSafeFile } from './paths.js';
 import { getVideoInfo } from './media/probe.js';
-import { exportVideo } from './media/export.js';
+import { exportVideo, getExportEstimate } from './media/export.js';
+import { getEncoderCapabilities } from './media/capabilities.js';
 import { remuxVideo } from './media/remux.js';
 import { app, BrowserWindow, ipcMain, dialog, protocol } from 'electron';
 import path from 'node:path';
@@ -168,6 +169,8 @@ handle('projectSetDeleteOnExit', (_event, projectPath, enabled) => projects.setD
 
 // Media services report progress through the existing renderer channels.
 handle('getVideoInfo', (_e, source) => getVideoInfo(source));
+handle('getExportEstimate', (_e, options) => getExportEstimate(options));
+handle('getEncoderCapabilities', () => getEncoderCapabilities());
 handle('exportVideo', (event, options) => exportVideo(options, data => event.sender.send('exportProgress', data)));
 handle('remuxVideo', (event, options) => remuxVideo(options, data => event.sender.send('remuxProgress', data)));
 

@@ -60,7 +60,7 @@ test('MKV selects matroska and all outputs use no-overwrite; unsupported contain
   const commands = [];
   const loaded = mainContext({
     fs: { lstat: async () => { throw Object.assign(new Error('absent'), { code: 'ENOENT' }); } },
-    spawn: (exe, args) => { commands.push(args); const child = new EventEmitter(); child.stderr = new EventEmitter(); queueMicrotask(() => child.emit('close', 0)); return child; },
+    spawn: (exe, args) => { commands.push(args); const child = new EventEmitter(); child.stderr = new EventEmitter(); child.stdout = new EventEmitter(); queueMicrotask(() => child.emit('close', 0)); return child; },
   });
   const opts = { inputPath: 'C:/in.mp4', outputPath: 'C:/out.mkv', containerFormat: 'mkv', duration: 2, mode: 'crf', crfValue: 23, preset: 'medium' };
   assert.equal((await loaded.handlers.get('exportVideo')({}, opts)).success, true);

@@ -21,7 +21,7 @@ function mainContext(overrides = {}) {
     'node:fs/promises': dependencies.fs,
     'node:fs': dependencies.fsSync,
     'node:child_process': { spawn: dependencies.spawn, execFile: dependencies.execFile },
-    'node:os': { platform: () => 'win32', tmpdir: () => 'C:/temp' },
+    'node:os': overrides.os || { platform: () => 'win32', tmpdir: () => 'C:/temp' },
   };
   const cache = new Map();
   function load(relative) {

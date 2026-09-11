@@ -54,24 +54,45 @@ export const ExportModal: React.FC<ExportModalProps> = ({
 
   const [isExporting, setIsExporting] = useState(false);
   const [progress, setProgress] = useState(0);
-  const [estimatedSize, setEstimatedSize] = useState('~45 MB');
+  const [estimatedSize, setEstimatedSize] = useState('Variable (content-dependent)');
+  const [estimateNote, setEstimateNote] = useState('');
+  const [nvenc, setNvenc] = useState(false);
+  const [capabilityNote, setCapabilityNote] = useState('Checking NVENC availability...');
   const [eta, setEta] = useState('');
   const [exportError, setExportError] = useState('');
 
   useEffect(() => {
-    // Calculate estimated output size based on settings
-    const duration = Math.max(0, outTime - inTime);
-    if (duration <= 0) {
-      setEstimatedSize('—');
+    if (!window.electronAPI) { setCapabilityNote('NVENC checking requires the desktop app.'); return; }
+    let active = true;
+    window.electronAPI.getEncoderCapabilities().then(unwrapIpc).then(result => {
+      if (active) { setNvenc(result.nvenc); setCapabilityNote(result.reason); }
+    }).catch(error => { if (active) setCapabilityNote(String(error)); });
+    return () => { active = false; };
+  }, []);
+
+  useEffect(() => {
+    if (options.mode === 'crf') {
+      setEstimatedSize('Variable (content-dependent)');
+      setEstimateNote('CRF/CQ filesize cannot be accurately predicted without encoding.');
       return;
     }
-    const bitrate = options.mode === 'crf' 
-      ? Math.max(1000, 8000 - (options.crfValue - 18) * 200)
-      : (options.targetSize * 8 * 1024) / duration;
-    
-    const estimatedMB = Math.round((bitrate * duration) / (8 * 1024));
-    setEstimatedSize(`~${estimatedMB} MB`);
-  }, [options, inTime, outTime]);
+    let active = true;
+    if (!window.electronAPI) { setEstimatedSize('Unavailable outside the desktop app'); return; }
+    setEstimatedSize('Calculating...');
+    setEstimateNote('');
+    const timer = setTimeout(() => {
+      window.electronAPI.getExportEstimate({ inputPath: videoSrc, duration: outTime - inTime,
+        targetSize: options.targetSize, copyAudio: options.copyAudio, useGPU: options.useGpu,
+      }).then(unwrapIpc).then(result => {
+        if (!active) return;
+        setEstimatedSize(`~${(result.expectedBytes / 1000000).toFixed(2)} MB`);
+        setEstimateNote(`Budget: video ${Math.round(result.videoBitrate / 1000)} kb/s + audio ${Math.round(result.audioBitrate / 1000)} kb/s, including mux allowance and safety reserve. ${options.useGpu ? 'NVENC is approximate and may undershoot substantially.' : 'CPU uses two passes; actual size can vary.'} ${options.copyAudio ? 'Copied audio uses the source average bitrate.' : ''}`);
+      }).catch(error => {
+        if (active) { setEstimatedSize('Unavailable'); setEstimateNote(error instanceof Error ? error.message : String(error)); }
+      });
+    }, 250);
+    return () => { active = false; clearTimeout(timer); };
+  }, [options.mode, options.targetSize, options.copyAudio, options.useGpu, videoSrc, inTime, outTime]);
 
   const handleExport = async () => {
     if (!window.electronAPI) {
@@ -115,12 +136,12 @@ export const ExportModal: React.FC<ExportModalProps> = ({
       // Listen for progress updates
       removeProgressListener = window.electronAPI.onExportProgress((progressData: ExportProgress) => {
         setProgress(progressData.progress);
-        if (progressData.speed > 0) {
-          const remainingSeconds = Math.max(0, segmentDuration - progressData.currentTime) / progressData.speed;
+        if (progressData.etaSeconds !== undefined) {
+          const remainingSeconds = progressData.etaSeconds;
           const minutes = Math.floor(remainingSeconds / 60);
           const seconds = Math.floor(remainingSeconds % 60);
           setEta(`${minutes}:${seconds.toString().padStart(2, '0')}`);
-        }
+        } else setEta('');
       });
 
       const result = await window.electronAPI.exportVideo(exportOptions);
@@ -364,7 +385,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({
               className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
                 options.useGpu ? 'bg-emerald-600' : 'bg-slate-600'
               }`}
-              disabled={isExporting}
+              disabled={isExporting || !nvenc}
             >
               <span
                 className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
@@ -375,6 +396,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({
           </div>
 
           {/* Copy Audio Toggle */}
+          {capabilityNote && <p className="text-sm text-slate-400">{capabilityNote}</p>}
           <div className="flex items-center justify-between">
             <label className="text-sm font-medium text-slate-300">
               Copy Audio Stream
@@ -396,6 +418,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({
 
           {/* Estimated Output Size */}
           <div className="bg-slate-700/30 rounded-lg p-4">
+            {estimateNote && <p className="text-sm text-slate-400 mb-2">{estimateNote}</p>}
             <div className="flex justify-between items-center text-sm">
               <span className="text-slate-400">Estimated Output Size:</span>
               <span className="text-white font-medium">{estimatedSize}</span>

@@ -21,11 +21,12 @@ test('extracted probe preserves normalization and rejects malformed JSON interna
 test('extracted runner preserves NVENC arguments and export/remux progress', async () => {
   const commands = [], events = [];
   const loaded = mainContext({
+    execFile: (_exe, _args, _options, done) => done(null, '', ''),
     fs: { lstat: async () => { throw Object.assign(new Error(), { code: 'ENOENT' }); } },
     spawn: (_exe, args) => {
       commands.push(args);
-      const child = new EventEmitter(); child.stderr = new EventEmitter();
-      queueMicrotask(() => { child.stderr.emit('data', 'time=00:00:01.00 speed=2.0x'); child.emit('close', 0); });
+      const child = new EventEmitter(); child.stderr = new EventEmitter(); child.stdout = new EventEmitter();
+      queueMicrotask(() => { child.stdout.emit('data', 'out_time_us=1000000\nspeed=2.0x\nprogress=continue\n'); child.emit('close', 0); });
       return child;
     },
   });

@@ -18,23 +18,41 @@ export async function assertOutputAvailable(inputPath, outputPath) {
   throw new Error(`OUTPUT_EXISTS: ${outputPath} already exists. Choose a different output filename.`);
 }
 
-export function runFFmpeg(args, { duration, onProgress, remux = false, inputPath }) {
+export function runFFmpeg(args, { duration, onProgress, remux = false, inputPath, pass = 1, passes = 1, progressState = {} }) {
   return new Promise((resolve, reject) => {
     const executable = getFFmpegPath().ffmpeg;
     console.log(remux ? 'FFmpeg remux command:' : 'FFmpeg command:', executable, args.join(' '));
-    const child = spawn(executable, args);
+    const child = spawn(executable, ['-progress', 'pipe:1', '-nostats', ...args], { windowsHide: true });
     let error = '';
+    let buffer = '', record = {}, currentTime = 0, smoothSpeed = progressState.speed || 0, lastProgress = 0;
+    const report = () => {
+      const time = Number(record.out_time_us ?? record.out_time_ms) / 1000000;
+      if (Number.isFinite(time)) currentTime = Math.max(currentTime, Math.min(duration || Infinity, Math.max(0, time)));
+      const speed = Number(String(record.speed || '').replace('x', ''));
+      if (Number.isFinite(speed) && speed > 0) smoothSpeed = smoothSpeed ? smoothSpeed * 0.8 + speed * 0.2 : speed;
+      progressState.speed = smoothSpeed;
+      const completed = (pass - 1) * duration + currentTime;
+      const progress = duration > 0 ? Math.min(99, Math.floor(completed / (duration * passes) * 100)) : 0;
+      lastProgress = Math.max(lastProgress, progress);
+      onProgress?.({ ...(remux ? { inputPath } : {}), currentTime, speed: smoothSpeed, progress: remux && !duration ? undefined : lastProgress,
+        etaSeconds: smoothSpeed > 0 && duration > 0 ? Math.max(0, duration * passes - completed) / smoothSpeed : undefined,
+        pass, passes });
+      record = {};
+    };
+    child.stdout.on('data', data => {
+      buffer += data.toString();
+      let newline;
+      while ((newline = buffer.indexOf('\n')) >= 0) {
+        const line = buffer.slice(0, newline).trim();
+        buffer = buffer.slice(newline + 1);
+        const separator = line.indexOf('=');
+        if (separator > 0) record[line.slice(0, separator)] = line.slice(separator + 1);
+        if (line.startsWith('progress=')) report();
+      }
+      buffer = buffer.slice(-8192);
+    });
     child.stderr.on('data', data => {
-      const output = data.toString();
-      error += output;
-      const match = output.match(/time=(\d{2}):(\d{2}):(\d{2}\.\d{2})/);
-      if (!match) return;
-      const currentTime = Number(match[1]) * 3600 + Number(match[2]) * 60 + Number(match[3]);
-      const speed = output.match(/speed=\s*(\d+\.?\d*)x/);
-      const progress = duration > 0
-        ? (remux ? Math.min(99, Math.round(currentTime / duration * 100)) : Math.round(Math.min(100, currentTime / duration * 100)))
-        : (remux ? undefined : 0);
-      onProgress?.({ ...(remux ? { inputPath } : {}), currentTime, speed: speed ? Number(speed[1]) : 1, progress });
+      error = (error + data.toString()).slice(-65536);
     });
     child.on('close', code => code === 0 ? resolve() : reject(new Error(`FFmpeg${remux ? ' remux' : ''} failed with code ${code}: ${error}`)));
     child.on('error', err => reject(new Error(`Failed to start FFmpeg${remux ? ' for remux' : ''}: ${err.message}`)));

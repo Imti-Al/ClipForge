@@ -9,6 +9,8 @@ const requests = [
   "selectMkvFiles",
   "showSaveVideoDialog",
   "getVideoInfo",
+  "getExportEstimate",
+  "getEncoderCapabilities",
   "importBlob",
   "isTempImport",
   "moveFile",

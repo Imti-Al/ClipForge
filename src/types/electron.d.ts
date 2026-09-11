@@ -21,6 +21,8 @@ export interface ElectronAPI {
   moveFile: (src: string, dst: string) => Promise<IpcResult<{ dst: string }>>;
   
   // Export operations
+  getExportEstimate: (options: Pick<ExportOptions, 'inputPath' | 'duration' | 'targetSize' | 'copyAudio' | 'useGPU'>) => Promise<IpcResult<ExportEstimate>>;
+  getEncoderCapabilities: () => Promise<IpcResult<{ nvenc: boolean; reason: string }>>;
   exportVideo: (options: ExportOptions) => Promise<IpcResult<{ outputPath: string }>>;
   onExportProgress: (callback: (data: ExportProgress) => void) => () => void;
   
@@ -74,10 +76,23 @@ export interface ExportOptions {
   copyAudio: boolean;
 }
 
+export interface ExportEstimate {
+  requestedBytes: number;
+  expectedBytes: number;
+  videoBitrate: number;
+  audioBitrate: number;
+  muxBytes: number;
+  safetyBytes: number;
+  approximate: boolean;
+}
+
 export interface ExportProgress {
   progress: number;
   currentTime: number;
   speed: number;
+  etaSeconds?: number;
+  pass?: number;
+  passes?: number;
 }
 
 export interface RemuxOptions {
@@ -91,6 +106,9 @@ export interface RemuxProgress {
   currentTime: number;
   speed: number;
   progress?: number;
+  etaSeconds?: number;
+  pass?: number;
+  passes?: number;
 }
 
 export interface ProjectSegment {
