@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { unwrapIpc } from '../utils/ipc';
-import { X, Folder, Play } from 'lucide-react';
+import Dialog from './Dialog';
+import { Folder, Play, Cpu, Zap, ChevronDown } from 'lucide-react';
 import type { ExportOptions, ExportProgress } from '../types/electron';
 
 interface ExportModalProps {
@@ -195,274 +196,56 @@ export const ExportModal: React.FC<ExportModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50">
-      <div className="bg-slate-800/95 backdrop-blur-md rounded-xl border border-slate-700/50 w-full max-w-2xl mx-4 shadow-2xl">
-        <div className="flex items-center justify-between p-6 border-b border-slate-700/50">
-          <h2 className="text-xl font-semibold text-white">Export Video</h2>
-          <button
-            onClick={onClose}
-            className="p-2 hover:bg-slate-700/50 rounded-lg transition-colors"
-            disabled={isExporting}
-          >
-            <X className="w-5 h-5 text-slate-400" />
-          </button>
+    <Dialog title="Export selection" eyebrow="MAKE IT READY TO SHARE" busy={isExporting} onClose={onClose}
+      footer={<>
+        <span className="footer-note"><strong>{estimatedSize}</strong><small>{isExporting ? 'Keep ClipForge open until finished.' : options.mode === 'target' ? 'Approximate final size, not a guarantee.' : 'Your source file stays untouched.'}</small></span>
+        <button onClick={handleExport} disabled={isExporting || !options.outputPath || !options.filename} className="primary-button"><Play size={15} />{isExporting ? 'Exporting...' : 'Start Export'}</button>
+      </>}>
+      <div className="export-source"><span className="truncate" title={videoSrc}>{getBasename(videoSrc)}</span><span className="mono">{formatTime(outTime - inTime)} selected</span></div>
+      {exportError && <div role="alert" className="error-box">{exportError}</div>}
+      <fieldset disabled={isExporting} hidden={isExporting} className="export-settings">
+        <div className="mode-choices" aria-label="Compression mode">
+          <button type="button" className={options.mode === 'crf' ? 'selected' : ''} aria-pressed={options.mode === 'crf'} onClick={() => setOptions(prev => ({ ...prev, mode: 'crf' }))}><strong>Quality</strong><span>Keep the detail you need</span></button>
+          <button type="button" className={options.mode === 'target' ? 'selected' : ''} aria-pressed={options.mode === 'target'} onClick={() => setOptions(prev => ({ ...prev, mode: 'target' }))}><strong>Target size</strong><span>Make it fit a file limit</span></button>
         </div>
-
-        <div className="p-6 space-y-6">
-          {exportError && <p role="alert" className="text-sm text-red-400">{exportError}</p>}
-          {/* Output Format */}
-          <div>
-            <label className="block text-sm font-medium text-slate-300 mb-2">
-              Output Container Format
-            </label>
-            <select
-              value={options.format}
-              onChange={(e) => {
-                const nextFormat = e.target.value;
-                setOptions(prev => {
-                  const next = { ...prev, format: nextFormat };
-                  // If the user already chose an output file, keep its extension aligned.
-                  if (next.outputPath) {
-                    const base = stripExtension(next.outputPath);
-                    next.outputPath = `${base}.${String(nextFormat).toLowerCase()}`;
-                  }
-                  return next;
-                });
-              }}
-              className="w-full bg-slate-700/50 border border-slate-600 rounded-lg px-3 py-2 text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
-              disabled={isExporting}
-            >
-              <option value="mp4">MP4</option>
-              <option value="mkv">MKV</option>
-            </select>
-          </div>
-
-          {/* Filename */}
-          <div>
-            <label className="block text-sm font-medium text-slate-300 mb-2">
-              Filename
-            </label>
-            <input
-              type="text"
-              value={options.filename}
-              onChange={(e) => {
-                const raw = e.target.value;
-                const cleaned = stripExtension(raw);
-                setOptions(prev => {
-                  const next = { ...prev, filename: cleaned };
-                  // If an outputPath is already chosen, keep its basename aligned to the filename.
-                  if (next.outputPath) {
-                    const dir = next.outputPath.replace(/[\\/][^\\/]*$/u, '');
-                    const sep = dir && !dir.endsWith('/') && !dir.endsWith('\\') ? (next.outputPath.includes('\\') ? '\\' : '/') : '';
-                    next.outputPath = `${dir}${sep}${ensureExt(cleaned, next.format)}`;
-                  }
-                  return next;
-                });
-              }}
-              className="w-full bg-slate-700/50 border border-slate-600 rounded-lg px-3 py-2 text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
-              disabled={isExporting}
-            />
-          </div>
-
-          {/* Destination */}
-          <div>
-            <label className="block text-sm font-medium text-slate-300 mb-2">
-              Save As
-            </label>
-            <div className="flex gap-2">
-              <input
-                type="text"
-                value={options.outputPath}
-                onChange={(e) => setOptions(prev => ({ ...prev, outputPath: e.target.value }))}
-                className="flex-1 bg-slate-700/50 border border-slate-600 rounded-lg px-3 py-2 text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
-                placeholder="Choose an output file..."
-                disabled={isExporting}
-              />
-              <button
-                onClick={handleBrowseOutputFile}
-                className="px-4 py-2 bg-slate-600 hover:bg-slate-500 rounded-lg transition-colors flex items-center gap-2"
-                disabled={isExporting}
-              >
-                <Folder className="w-4 h-4" />
-                Browse
-              </button>
-            </div>
-          </div>
-
-          {/* Mode Switcher */}
-          <div>
-            <label className="block text-sm font-medium text-slate-300 mb-2">
-              Compression Mode
-            </label>
-            <div className="flex bg-slate-700/50 rounded-lg p-1">
-              <button
-                onClick={() => setOptions(prev => ({ ...prev, mode: 'crf' }))}
-                className={`flex-1 py-2 px-4 rounded-md transition-colors ${
-                  options.mode === 'crf'
-                    ? 'bg-blue-600 text-white'
-                    : 'text-slate-400 hover:text-white'
-                }`}
-                disabled={isExporting}
-              >
-                CRF (Quality)
-              </button>
-              <button
-                onClick={() => setOptions(prev => ({ ...prev, mode: 'target' }))}
-                className={`flex-1 py-2 px-4 rounded-md transition-colors ${
-                  options.mode === 'target'
-                    ? 'bg-blue-600 text-white'
-                    : 'text-slate-400 hover:text-white'
-                }`}
-                disabled={isExporting}
-              >
-                Target Size
-              </button>
-            </div>
-          </div>
-
-          {/* Mode-specific options */}
-          {options.mode === 'crf' ? (
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <label className="block text-sm font-medium text-slate-300 mb-2">
-                  CRF Value
-                </label>
-                <input
-                  type="number"
-                  min="0"
-                  max="51"
-                  value={options.crfValue}
-                  onChange={(e) => setOptions(prev => ({ ...prev, crfValue: parseInt(e.target.value) }))}
-                  className="w-full bg-slate-700/50 border border-slate-600 rounded-lg px-3 py-2 text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  disabled={isExporting}
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-slate-300 mb-2">
-                  Preset
-                </label>
-                <select
-                  value={options.preset}
-                  onChange={(e) => setOptions(prev => ({ ...prev, preset: e.target.value }))}
-                  className="w-full bg-slate-700/50 border border-slate-600 rounded-lg px-3 py-2 text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  disabled={isExporting}
-                >
-                  <option value="ultrafast">Ultra Fast</option>
-                  <option value="superfast">Super Fast</option>
-                  <option value="veryfast">Very Fast</option>
-                  <option value="faster">Faster</option>
-                  <option value="fast">Fast</option>
-                  <option value="medium">Medium</option>
-                  <option value="slow">Slow</option>
-                  <option value="slower">Slower</option>
-                  <option value="veryslow">Very Slow</option>
-                </select>
-              </div>
-            </div>
-          ) : (
-            <div>
-              <label className="block text-sm font-medium text-slate-300 mb-2">
-                Target Size (MB)
-              </label>
-              <input
-                type="number"
-                min="1"
-                value={options.targetSize}
-                onChange={(e) => setOptions(prev => ({ ...prev, targetSize: parseInt(e.target.value) }))}
-                className="w-full bg-slate-700/50 border border-slate-600 rounded-lg px-3 py-2 text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
-                disabled={isExporting}
-              />
-            </div>
-          )}
-
-          {/* GPU Encoding Toggle */}
-          <div className="flex items-center justify-between">
-            <label className="text-sm font-medium text-slate-300">
-              Use GPU Encoding (NVENC)
-            </label>
-            <button
-              onClick={() => setOptions(prev => ({ ...prev, useGpu: !prev.useGpu }))}
-              className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
-                options.useGpu ? 'bg-emerald-600' : 'bg-slate-600'
-              }`}
-              disabled={isExporting || !nvenc}
-            >
-              <span
-                className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
-                  options.useGpu ? 'translate-x-6' : 'translate-x-1'
-                }`}
-              />
-            </button>
-          </div>
-
-          {/* Copy Audio Toggle */}
-          {capabilityNote && <p className="text-sm text-slate-400">{capabilityNote}</p>}
-          <div className="flex items-center justify-between">
-            <label className="text-sm font-medium text-slate-300">
-              Copy Audio Stream
-            </label>
-            <button
-              onClick={() => setOptions(prev => ({ ...prev, copyAudio: !prev.copyAudio }))}
-              className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
-                options.copyAudio ? 'bg-emerald-600' : 'bg-slate-600'
-              }`}
-              disabled={isExporting}
-            >
-              <span
-                className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
-                  options.copyAudio ? 'translate-x-6' : 'translate-x-1'
-                }`}
-              />
-            </button>
-          </div>
-
-          {/* Estimated Output Size */}
-          <div className="bg-slate-700/30 rounded-lg p-4">
-            {estimateNote && <p className="text-sm text-slate-400 mb-2">{estimateNote}</p>}
-            <div className="flex justify-between items-center text-sm">
-              <span className="text-slate-400">Estimated Output Size:</span>
-              <span className="text-white font-medium">{estimatedSize}</span>
-            </div>
-            <div className="flex justify-between items-center text-sm mt-1">
-              <span className="text-slate-400">Segment Duration:</span>
-              <span className="text-white font-medium">{formatTime(outTime - inTime)}</span>
-            </div>
-          </div>
-
-          {/* Progress Bar (shown during export) */}
-          {isExporting && (
-            <div className="space-y-2">
-              <div className="flex justify-between text-sm">
-                <span className="text-slate-400">Exporting...</span>
-                <span className="text-white">{Math.round(progress)}%</span>
-              </div>
-              <div className="w-full bg-slate-700 rounded-full h-2">
-                <div
-                  className="bg-blue-600 h-2 rounded-full transition-all duration-300"
-                  style={{ width: `${progress}%` }}
-                />
-              </div>
-              {eta && (
-                <div className="text-center text-sm text-slate-400">
-                  ETA: {eta}
-                </div>
-              )}
-            </div>
-          )}
+        <div className="setting-row">
+          {options.mode === 'crf' ? <>
+            <div><label htmlFor="quality">Quality level <span className="subtle">{options.useGpu ? 'CQ' : 'CRF'}</span></label><p>Lower values retain more detail and use more space.</p></div>
+            <input id="quality" className="number-input" type="number" min="0" max="51" value={options.crfValue} onChange={e => setOptions(prev => ({ ...prev, crfValue: parseInt(e.target.value) }))} />
+          </> : <>
+            <div><label htmlFor="target-size">Final file budget</label><p>Approximate total size, including audio.</p></div>
+            <div className="input-unit"><input id="target-size" className="number-input" type="number" min="1" max="100000" value={options.targetSize} onChange={e => setOptions(prev => ({ ...prev, targetSize: parseInt(e.target.value) }))} /><span>MB</span></div>
+          </>}
         </div>
-
-        {/* Export Button */}
-        <div className="flex justify-end p-6 border-t border-slate-700/50">
-          <button
-            onClick={handleExport}
-            disabled={isExporting || !options.outputPath || !options.filename}
-            className="px-6 py-3 bg-blue-600 hover:bg-blue-700 disabled:bg-slate-600 disabled:cursor-not-allowed rounded-lg font-medium text-white transition-colors flex items-center gap-2"
-          >
-            <Play className="w-4 h-4" />
-            {isExporting ? 'Exporting...' : 'Start Export'}
-          </button>
+        <div className="setting-row">
+          <div><label>Encoder</label><p>{options.useGpu ? 'Fast hardware encoding. Size may vary.' : options.mode === 'target' ? 'Two-pass encoding for a closer size match.' : 'Software encoding with consistent quality.'}</p></div>
+          <div className="encoder-choices">
+            <button type="button" aria-pressed={!options.useGpu} className={!options.useGpu ? 'selected' : ''} onClick={() => setOptions(prev => ({ ...prev, useGpu: false }))}><Cpu size={14} />CPU</button>
+            <button type="button" aria-label="Use NVENC" aria-pressed={options.useGpu} disabled={isExporting || !nvenc} title={nvenc ? 'NVIDIA hardware encoding' : capabilityNote} className={options.useGpu ? 'selected' : ''} onClick={() => setOptions(prev => ({ ...prev, useGpu: true }))}><Zap size={14} />NVENC</button>
+          </div>
         </div>
-      </div>
-    </div>
+        {capabilityNote && <details className="capability-note"><summary>NVENC status</summary><p>{capabilityNote}</p></details>}
+        <div className="destination-section">
+          <label htmlFor="export-name">File name</label>
+          <div className="destination-row">
+            <input id="export-name" value={options.filename} onChange={e => {
+              const filename = stripExtension(e.target.value);
+              setOptions(prev => ({ ...prev, filename, outputPath: prev.outputPath ? prev.outputPath.replace(/[^/\\]+$/, ensureExt(filename, prev.format)) : '' }));
+            }} />
+            <select aria-label="Container" value={options.format} onChange={e => { const format = e.target.value; setOptions(prev => ({ ...prev, format, outputPath: prev.outputPath ? stripExtension(prev.outputPath) + '.' + format : '' })); }}><option value="mp4">.mp4</option><option value="mkv">.mkv</option></select>
+          </div>
+          <label htmlFor="export-path">Destination</label>
+          <div className="destination-row"><input id="export-path" value={options.outputPath} onChange={e => setOptions(prev => ({ ...prev, outputPath: e.target.value }))} placeholder="Choose where to save your clip" /><button className="secondary-button" onClick={handleBrowseOutputFile}><Folder size={15} />Browse</button></div>
+        </div>
+        <details className="advanced-settings">
+          <summary>Advanced settings <ChevronDown size={14} /></summary>
+          <div className="setting-row"><div><label htmlFor="preset">Encoding effort</label><p>Slower presets trade time for compression efficiency.</p></div>
+            <select id="preset" value={options.preset} onChange={e => setOptions(prev => ({ ...prev, preset: e.target.value }))}>{['ultrafast','superfast','veryfast','faster','fast','medium','slow','slower','veryslow'].map(preset => <option key={preset} value={preset}>{preset}</option>)}</select></div>
+          <label className="check-row"><input type="checkbox" checked={options.copyAudio} onChange={e => setOptions(prev => ({ ...prev, copyAudio: e.target.checked }))} /><span>Copy original audio<small>Otherwise re-encode as AAC at 128 kb/s.</small></span></label>
+        </details>
+      </fieldset>
+      <div className="estimate-summary"><span className="eyebrow">EXPECTED FILE SIZE</span><strong>{estimatedSize}</strong><p>{estimateNote}</p></div>
+      {isExporting && <div className="job-progress" role="status" aria-live="polite"><div><strong>Exporting your clip</strong><span className="mono">{Math.round(progress)}%</span></div><progress max="100" value={progress} aria-label="Export progress" /><p>{eta ? `Estimated time remaining ${eta}` : 'Preparing export...'}</p></div>}
+    </Dialog>
   );
 };

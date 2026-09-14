@@ -1,5 +1,5 @@
-import React from 'react';
-import { FolderOpen, Save, FilePen as FileOpen, Trash2, RefreshCw, ChevronLeft, ChevronRight } from 'lucide-react';
+import React, { useState } from 'react';
+import { FolderOpen, Save, FilePen, RefreshCw, PanelRight, ChevronDown, Scissors, Check } from 'lucide-react';
 
 interface MenuBarProps {
   onOpenRemux: () => void;
@@ -14,112 +14,32 @@ interface MenuBarProps {
   isSidebarCollapsed?: boolean;
 }
 
-const MenuBar: React.FC<MenuBarProps> = ({ 
-  onOpenRemux, 
-  onLoadVideo, 
-  onSaveProject,
-  onSaveProjectAs,
-  onOpenProject,
-  deleteProjectOnExit,
-  onToggleDeleteProjectOnExit,
-  onExit,
-  onToggleSidebar,
-  isSidebarCollapsed
-}) => {
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    if ((e.ctrlKey || e.metaKey) && e.key === 's') {
-      e.preventDefault();
-      onSaveProject?.();
-    }
-  };
-
-  return (
-    <div 
-      className="bg-slate-800 border-b border-slate-600 px-6 py-3 flex items-center justify-between"
-      onKeyDown={handleKeyDown}
-      tabIndex={-1}
-    >
-      <div className="flex items-center space-x-6">
-        <div className="flex items-center space-x-6 text-sm">
-          <div className="relative group">
-            <button className="hover:text-blue-400 transition-colors">File</button>
-            {/* Simple dropdown menu */}
-            <div className="absolute top-full left-0 mt-1 bg-slate-700 border border-slate-600 rounded shadow-lg opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 z-10 min-w-48">
-              <button 
-                onClick={onLoadVideo}
-                className="flex items-center space-x-2 px-4 py-2 text-sm hover:bg-slate-600 transition-colors whitespace-nowrap"
-              >
-                <FolderOpen size={16} />
-                <span>Open Video</span>
-              </button>
-              <div className="border-t border-slate-600 my-1"></div>
-              <button 
-                onClick={onSaveProject}
-                className="flex items-center space-x-2 px-4 py-2 text-sm hover:bg-slate-600 transition-colors whitespace-nowrap w-full text-left"
-              >
-                <Save size={16} />
-                <span>Save Project</span>
-                <span className="ml-auto text-xs text-gray-400">Ctrl+S</span>
-              </button>
-              <button 
-                onClick={onSaveProjectAs}
-                className="flex items-center space-x-2 px-4 py-2 text-sm hover:bg-slate-600 transition-colors whitespace-nowrap w-full text-left"
-              >
-                <Save size={16} />
-                <span>Save Project As...</span>
-              </button>
-              <button 
-                onClick={onOpenProject}
-                className="flex items-center space-x-2 px-4 py-2 text-sm hover:bg-slate-600 transition-colors whitespace-nowrap w-full text-left"
-              >
-                <FileOpen size={16} />
-                <span>Open Project...</span>
-              </button>
-              <div className="border-t border-slate-600 my-1"></div>
-              <button 
-                onClick={onOpenRemux}
-                className="flex items-center space-x-2 px-4 py-2 text-sm hover:bg-slate-600 transition-colors whitespace-nowrap w-full text-left"
-              >
-                <RefreshCw size={16} />
-                <span>Remux...</span>
-              </button>
-              <div className="border-t border-slate-600 my-1"></div>
-              <button 
-                onClick={onToggleDeleteProjectOnExit}
-                className="flex items-center space-x-2 px-4 py-2 text-sm hover:bg-slate-600 transition-colors whitespace-nowrap w-full text-left"
-              >
-                <Trash2 size={16} />
-                <span>Delete project on exit</span>
-                <span className="ml-auto">
-                  {deleteProjectOnExit ? '✓' : ''}
-                </span>
-              </button>
-              <div className="border-t border-slate-600 my-1"></div>
-              <button 
-                onClick={onExit}
-                className="flex items-center space-x-2 px-4 py-2 text-sm hover:bg-slate-600 transition-colors whitespace-nowrap w-full text-left"
-              >
-                <span>Exit</span>
-              </button>
-            </div>
-          </div>
-          <button className="hover:text-blue-400 transition-colors">Edit</button>
-          <button className="hover:text-blue-400 transition-colors">View</button>
-          <button className="hover:text-blue-400 transition-colors">Help</button>
-        </div>
-      </div>
-      
-      <div className="flex items-center space-x-4">
-        <button 
-          onClick={onToggleSidebar}
-          className="p-2 hover:bg-slate-700 rounded transition-colors"
-          title={isSidebarCollapsed ? "Show sidebar" : "Hide sidebar"}
-        >
-          {isSidebarCollapsed ? <ChevronLeft size={18} /> : <ChevronRight size={18} />}
-        </button>
-      </div>
+const MenuBar: React.FC<MenuBarProps> = (props) => {
+  const [open, setOpen] = useState(false);
+  const action = (callback?: () => void) => { setOpen(false); callback?.(); };
+  return <header className="app-toolbar">
+    <div className="wordmark"><span className="brand-mark"><Scissors size={17} /></span>ClipForge</div>
+    <div className="file-menu" onBlur={e => { if (!e.currentTarget.contains(e.relatedTarget)) setOpen(false); }} onKeyDown={e => { if (e.key === 'Escape') setOpen(false); }}>
+      <button className="quiet-button" aria-expanded={open} aria-controls="file-actions" onClick={() => setOpen(!open)}>File <ChevronDown size={12} /></button>
+      {open && <nav id="file-actions" className="menu-popover" aria-label="File actions">
+        <button onClick={() => action(props.onLoadVideo)}><FolderOpen size={15} />Open Video</button>
+        <button onClick={() => action(props.onOpenProject)}><FilePen size={15} />Open Project...</button>
+        <hr />
+        <button onClick={() => action(props.onSaveProject)}><Save size={15} />Save Project <kbd>Ctrl S</kbd></button>
+        <button onClick={() => action(props.onSaveProjectAs)}><Save size={15} />Save Project As...</button>
+        <hr />
+        <button onClick={() => action(props.onOpenRemux)}><RefreshCw size={15} />Remux...</button>
+        <button aria-pressed={props.deleteProjectOnExit} onClick={() => action(props.onToggleDeleteProjectOnExit)}><span className="menu-check">{props.deleteProjectOnExit && <Check size={14} />}</span>Delete project on exit</button>
+        <hr /><button onClick={() => action(props.onExit)}>Exit</button>
+      </nav>}
     </div>
-  );
+    <span className="toolbar-divider" />
+    <button className="quiet-button" onClick={props.onLoadVideo}><FolderOpen size={15} />Open video</button>
+    <div className="toolbar-end">
+      <span className="local-indicator"><i />On your device</span>
+      <button className="quiet-button" onClick={props.onOpenRemux}><RefreshCw size={14} />Remux</button>
+      <button className="icon-button" aria-label={props.isSidebarCollapsed ? 'Show clips' : 'Hide clips'} aria-pressed={!props.isSidebarCollapsed} onClick={props.onToggleSidebar} title="Toggle clip list"><PanelRight size={17} /></button>
+    </div>
+  </header>;
 };
-
 export default MenuBar;

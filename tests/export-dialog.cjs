@@ -29,7 +29,7 @@ function dialog(api) {
     window: { electronAPI: api }, console,
     setTimeout: fn => { timers.set(++timerId, fn); return timerId; }, clearTimeout: id => timers.delete(id),
   });
-  const flatten = node => node == null ? [] : typeof node !== 'object' ? [node] : [node, ...node.children.flat(Infinity).flatMap(flatten)];
+  const flatten = node => node == null ? [] : typeof node !== 'object' ? [node] : [node, ...node.children.flat(Infinity).flatMap(flatten), ...flatten(node.props.footer)];
   return {
     render() { cursor = 0; const tree = flatten(exports.ExportModal({ videoSrc: 'safe-file:C:/source.mp4', inTime: 4, outTime: 10, onClose() {} }));
       const pending = effects; effects = []; pending.forEach(fn => fn()); return tree; },
@@ -48,7 +48,7 @@ test('dialog shows variable CRF/CQ, gates NVENC and ignores obsolete target esti
   view.render(); await tick();
   assert.match(view.text(), /Variable/); assert.match(view.text(), /cannot be accurately predicted/);
   assert.match(view.text(), /No compatible GPU/);
-  const gpuButton = view.render().find(node => node.type === 'button' && String(node.props.onClick).includes('useGpu'));
+  const gpuButton = view.render().find(node => node.type === 'button' && node.props['aria-label'] === 'Use NVENC');
   assert.equal(gpuButton.props.disabled, true);
   view.update({ mode: 'target', targetSize: 2 }); await view.timers();
   assert.equal(requests[0].duration, 6); assert.equal(requests[0].copyAudio, true);

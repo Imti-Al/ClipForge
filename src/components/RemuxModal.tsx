@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { unwrapIpc } from '../utils/ipc';
-import { X, Upload, Trash2 } from 'lucide-react';
+import Dialog from './Dialog';
+import { Upload, Trash2, ArrowRight, RefreshCw } from 'lucide-react';
 import type { RemuxOptions, RemuxProgress } from '../types/electron';
 
 interface RemuxModalProps {
@@ -145,10 +146,10 @@ const RemuxModal: React.FC<RemuxModalProps> = ({ onClose }) => {
 
   const getStatusColor = (status: string) => {
     switch (status) {
-      case 'completed': return 'text-emerald-400';
-      case 'processing': return 'text-blue-400';
-      case 'error': return 'text-red-400';
-      default: return 'text-gray-400';
+      case 'completed': return 'state-completed';
+      case 'processing': return 'state-processing';
+      case 'error': return 'state-error';
+      default: return 'muted';
     }
   };
 
@@ -161,142 +162,24 @@ const RemuxModal: React.FC<RemuxModalProps> = ({ onClose }) => {
     }
   };
 
-  return (
-    <div className="fixed inset-0 bg-black bg-opacity-60 backdrop-blur-sm flex items-center justify-center z-50">
-      <div className="bg-slate-800 bg-opacity-95 backdrop-blur-md rounded-lg w-[800px] max-h-[80vh] overflow-hidden border border-slate-600">
-        {/* Header */}
-        <div className="flex items-center justify-between p-6 border-b border-slate-600">
-          <h2 className="text-xl font-semibold text-gray-200">Remux Recordings</h2>
-          <button 
-            onClick={onClose}
-            disabled={isRunning}
-            className="p-2 hover:bg-slate-700 rounded transition-colors"
-          >
-            <X size={20} className="text-gray-400" />
-          </button>
-        </div>
-        
-        <div className="p-6">
-          {queueError && <p role="alert" className="mb-3 text-sm text-red-400">{queueError}</p>}
-          {/* Drag & Drop Area */}
-          <div 
-            className={`border-2 border-dashed rounded-lg p-8 text-center mb-6 transition-colors cursor-pointer ${
-              isDragging ? 'border-blue-400 bg-blue-500/10' : 'border-slate-600 hover:border-blue-400'
-            }`}
-            onClick={addMkvFiles}
-            onDragOver={handleDragOver}
-            onDragLeave={handleDragLeave}
-            onDrop={handleDrop}
-          >
-            <Upload size={48} className="mx-auto text-gray-400 mb-4" />
-            <p className="text-gray-300 mb-2">
-              Click here to select MKV files to remux, or drop files in this window.
-            </p>
-            <p className="text-sm text-gray-400">
-              Supported formats: MKV files
-            </p>
-          </div>
-          
-          {/* Table */}
-          <div className="bg-slate-900 rounded-lg overflow-hidden">
-            <div className="grid grid-cols-2 bg-slate-700 text-sm font-medium text-gray-300">
-              <div className="p-3 border-r border-slate-600">MKV File</div>
-              <div className="p-3">Target File</div>
-            </div>
-            
-            <div className="max-h-64 overflow-y-auto">
-              {items.length === 0 && (
-                <div className="p-8 text-center text-gray-400">
-                  <p>No files added yet</p>
-                  <p className="text-sm mt-1">Click the area above to select MKV files</p>
-                </div>
-              )}
-              {items.map((item) => (
-                <div key={item.id} className="border-b border-slate-700 last:border-b-0">
-                  <div className="grid grid-cols-2 text-sm">
-                    <div className="p-3 border-r border-slate-600">
-                      <div className="text-gray-200 truncate" title={item.source}>
-                        {item.source}
-                      </div>
-                    </div>
-                    <div className="p-3">
-                      <div className="text-gray-200 truncate" title={item.target}>
-                        {item.target}
-                      </div>
-                    </div>
-                  </div>
-                  
-                  {item.error && <details className="px-3 pb-2 text-xs text-red-400">
-                    <summary>Remux failed: view details</summary>
-                    <pre className="max-h-32 overflow-auto whitespace-pre-wrap break-all">{item.error}</pre>
-                  </details>}
-                  {/* Progress bar */}
-                  <div className="px-3 pb-2">
-                    <div className="flex items-center justify-between mb-1">
-                      <span className={`text-xs ${getStatusColor(item.status)}`}>
-                        {getStatusText(item.status)}
-                      </span>
-                      {item.status === 'processing' && (
-                        <span className="text-xs text-gray-400">{item.duration > 0 ? `${item.progress}%` : 'Duration unavailable'}</span>
-                      )}
-                    </div>
-                    <div className="w-full bg-slate-600 rounded-full h-1">
-                      <div 
-                        className={`h-1 rounded-full transition-all duration-300 ${
-                          item.status === 'completed' ? 'bg-emerald-500' :
-                          item.status === 'processing' ? 'bg-blue-500' :
-                          item.status === 'error' ? 'bg-red-500' : 'bg-gray-500'
-                        }`}
-                        style={{ width: `${item.progress}%` }}
-                      />
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
-        
-        {/* Action buttons */}
-        <div className="flex justify-between p-6 border-t border-slate-600">
-          <div className="flex space-x-3">
-            <button 
-              onClick={clearFinished}
-              disabled={isRunning}
-              className="px-4 py-2 bg-slate-700 hover:bg-slate-600 text-gray-300 rounded transition-colors flex items-center space-x-2"
-            >
-              <Trash2 size={16} />
-              <span>Clear Finished Items</span>
-            </button>
-            <button 
-              onClick={clearAll}
-              disabled={isRunning}
-              className="px-4 py-2 bg-slate-700 hover:bg-slate-600 text-gray-300 rounded transition-colors"
-            >
-              Clear All Items
-            </button>
-          </div>
-          
-          <div className="flex space-x-3">
-            <button 
-              onClick={startRemux}
-              disabled={isRunning || !items.some(item => item.status === 'pending')}
-              className="px-6 py-2 bg-blue-500 hover:bg-blue-600 text-white rounded transition-colors"
-            >
-              Remux
-            </button>
-            <button 
-              onClick={onClose}
-            disabled={isRunning}
-              className="px-6 py-2 bg-slate-700 hover:bg-slate-600 text-gray-300 rounded transition-colors"
-            >
-              Close
-            </button>
-          </div>
-        </div>
-      </div>
+  return <Dialog title="Remux recordings" eyebrow="NEW CONTAINER. SAME QUALITY." busy={isRunning} onClose={onClose}
+    footer={<><div className="footer-actions"><button onClick={clearFinished} disabled={isRunning || !items.some(item => item.status === 'completed')} className="quiet-button"><Trash2 size={14} />Clear finished</button><button onClick={clearAll} disabled={isRunning || !items.length} className="quiet-button">Clear all</button></div>
+      <button onClick={startRemux} disabled={isRunning || !items.some(item => item.status === 'pending')} className="primary-button"><RefreshCw size={15} />{isRunning ? 'Remuxing...' : 'Remux'}</button></>}>
+    <p className="dialog-intro">Repackage MKV recordings as MP4 without re-encoding.<br />Original files stay in place. Outputs are saved beside them.</p>
+    {queueError && <p role="alert" className="error-box">{queueError}</p>}
+    <div className={`remux-drop ${isDragging ? 'dragging' : ''}`} onDragOver={handleDragOver} onDragLeave={handleDragLeave} onDrop={handleDrop}>
+      <Upload size={22} /><div><strong>Drop your MKV recordings here</strong><span>One file or a whole batch</span></div><button className="secondary-button" onClick={addMkvFiles}>Add files</button>
     </div>
-  );
+    <div className="remux-list-heading"><span>RECORDINGS</span><span>{items.length} {items.length === 1 ? 'file' : 'files'}</span></div>
+    <div className="remux-list">
+      {!items.length && <p className="remux-empty">Nothing queued yet. Add a recording to get started.</p>}
+      {items.map(item => <article key={item.id} className="remux-item">
+        <div className="remux-paths"><span title={item.source}>{item.source.split(/[/\\]/).pop()}</span><ArrowRight size={13} /><span title={item.target}>{item.target.split(/[/\\]/).pop()}</span></div>
+        <div className="remux-state"><span className={getStatusColor(item.status)}>{getStatusText(item.status)}</span><span className="mono">{item.status === 'processing' ? item.duration > 0 ? `${item.progress}%` : 'Duration unavailable' : item.status === 'completed' ? '100%' : ''}</span></div>
+        <progress aria-label={`Remux progress: ${item.source}`} max="100" value={item.progress} />
+        {item.error && <details className="remux-error"><summary>Remux failed: view details</summary><pre>{item.error}</pre></details>}
+      </article>)}
+    </div>
+  </Dialog>;
 };
-
 export default RemuxModal;

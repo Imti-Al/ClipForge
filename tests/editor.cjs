@@ -14,6 +14,7 @@ function editor(api) {
     return { success: true, data: result };
   }]));
   let slots = [], cursor = 0;
+  let isModalOpen = false;
   let effects = [], clock = 0, nextTimer = 0, closed = false;
   const timers = new Map(), listeners = new Map();
   const equalDeps = (a, b) => a && b && a.length === b.length && a.every((value, i) => Object.is(value, b[i]));
@@ -49,6 +50,7 @@ function editor(api) {
     compilerOptions: { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.React }
   }).outputText;
   vm.runInNewContext(code, {
+    HTMLElement: class {}, HTMLInputElement: class {}, HTMLTextAreaElement: class {},
     exports, require: name => name === 'react' ? react : name === '../utils/ipc' ? ipcExports : { default: name, X: 'X' },
     window: { electronAPI: transportedApi, addEventListener: (name, fn) => listeners.set(name, fn), removeEventListener: name => listeners.delete(name), close: () => { closed = true; } }, console,
     setTimeout: (fn, delay) => { const id = ++nextTimer; timers.set(id, { fn, due: clock + delay }); return id; },
@@ -56,7 +58,9 @@ function editor(api) {
   });
   const all = node => !node || typeof node !== 'object' ? [] : [node, ...(node.children || []).flat(Infinity).flatMap(all)];
   return {
-    render() { cursor = 0; const tree = all(exports.default({ onOpenExport() {}, onOpenRemux() {}, onVideoStateChange() {} })); const pending = effects; effects = []; pending.forEach(fn => fn()); return tree; },
+    render() { cursor = 0; const tree = all(exports.default({ isModalOpen, onOpenExport() {}, onOpenRemux() {}, onVideoStateChange() {} })); const pending = effects; effects = []; pending.forEach(fn => fn()); return tree; },
+    setModalOpen(value) { isModalOpen = value; this.render(); },
+    key(code) { this.render(); listeners.get('keydown')({ code, key: '', target: {}, preventDefault() {} }); },
     props(type) { return this.render().find(node => node.type === './' + type).props; },
     async advance(ms) { clock += ms; for (const [id, timer] of [...timers]) if (timer.due <= clock) { timers.delete(id); timer.fn(); } await new Promise(resolve => setImmediate(resolve)); },
     close() { listeners.get('beforeunload')({ preventDefault() {}, returnValue: '' }); },
@@ -77,6 +81,23 @@ function tempApi(overrides = {}) {
     ...overrides,
   };
 }
+
+test('editor shortcuts cannot trim or play behind a dialog; frame stepping pauses playback', async () => {
+  const app = editor(tempApi());
+  await app.props('MenuBar').onLoadVideo();
+  app.props('VideoPreview').onTimeUpdate(6);
+  app.setModalOpen(true);
+  app.key('KeyI'); app.key('Space');
+  assert.equal(app.props('Timeline').inTime, 0);
+  assert.equal(app.props('VideoPreview').isPlaying, false);
+  app.setModalOpen(false);
+  app.key('KeyI'); app.key('Space');
+  assert.equal(app.props('Timeline').inTime, 6);
+  assert.equal(app.props('VideoPreview').isPlaying, true);
+  app.key('Period');
+  assert.equal(app.props('VideoPreview').isPlaying, false);
+  assert.ok(app.props('VideoPreview').currentTime > 6);
+});
 
 test('new media and segment edits stay inside actual duration', async () => {
   const app = editor(tempApi());

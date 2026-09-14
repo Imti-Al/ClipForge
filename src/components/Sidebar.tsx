@@ -1,4 +1,5 @@
 import React from 'react';
+import { Plus, Trash2, ChevronRight } from 'lucide-react';
 import type { ProjectSegment, VideoInfo } from '../types/electron';
 
 interface SidebarProps {
@@ -62,6 +63,7 @@ const Sidebar: React.FC<SidebarProps> = ({
     return () => {
       document.removeEventListener('mousemove', handleMouseMove);
       document.removeEventListener('mouseup', handleMouseUp);
+      if (isResizing) { document.body.style.cursor = ''; document.body.style.userSelect = ''; }
     };
   }, [isResizing, onWidthChange]);
 
@@ -78,131 +80,38 @@ const Sidebar: React.FC<SidebarProps> = ({
   };
 
   return (
-    <div 
-      ref={sidebarRef}
-      className="bg-slate-800 border-l border-slate-600 flex flex-col relative"
-      style={{ width: `${width}px` }}
-    >
-      {/* Resize handle */}
-      <div
-        className="absolute left-0 top-0 bottom-0 w-1 cursor-col-resize hover:bg-blue-500 hover:bg-opacity-50 transition-colors z-10"
-        onMouseDown={handleResizeStart}
-        title="Drag to resize sidebar"
-      />
-      
-      {/* Video Info */}
-      <div className="p-4 border-b border-slate-600">
-        <h4 className="text-md font-semibold mb-3 text-gray-200">Video Info</h4>
-        
-        {isLoadingVideo ? (
-          <div className="flex items-center justify-center py-8">
-            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-400"></div>
-          </div>
-        ) : videoInfo ? (
-          <div className="space-y-3">
-            <div className="flex justify-between">
-              <span className="text-gray-400">Codec</span>
-              <span className="text-gray-200">
-                {videoInfo?.video?.codec && videoInfo.video.codec !== 'unknown'
-                  ? videoInfo.video.codec.toUpperCase()
-                  : 'Unknown'}
-              </span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-gray-400">Resolution</span>
-              <span className="text-gray-200">
-                {videoInfo.video ? `${videoInfo.video.width} x ${videoInfo.video.height}` : 'Unknown'}
-              </span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-gray-400">FPS</span>
-              <span className="text-gray-200">
-                {videoInfo.video ? Math.round(videoInfo.video.fps) : 'Unknown'}
-              </span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-gray-400">Duration</span>
-              <span className="text-gray-200">{formatTime(videoInfo.duration)}</span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-gray-400">File Size</span>
-              <span className="text-gray-200">{formatFileSize(videoInfo.size)}</span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-gray-400">Bitrate</span>
-              <span className="text-gray-200">
-                {Number.isFinite(videoInfo?.bitrate) && videoInfo.bitrate > 0
-                  ? `${Math.round(videoInfo.bitrate / 1000)} kbps`
-                  : 'Unknown'}
-              </span>
-            </div>
-          </div>
-        ) : (
-          <div className="text-center py-8 text-gray-400">
-            <p>No video loaded</p>
-            <p className="text-sm mt-2">Open a video file to see information</p>
-          </div>
-        )}
+    <aside ref={sidebarRef} className="clip-sidebar" style={{ width }} aria-label="Clips and source information">
+      <div className="sidebar-resize" onMouseDown={handleResizeStart} title="Drag to resize clip list" />
+      <div className="sidebar-heading"><div><p className="eyebrow">YOUR SELECTIONS</p><h2>Clips <span className="count">{videoInfo ? segments.length : 0}</span></h2></div>
+        <button className="icon-button" onClick={onAddSegment} disabled={!videoInfo || isLoadingVideo} title="Add a clip from current In/Out" aria-label="Add segment"><Plus size={18} /></button>
       </div>
-      
-      {/* Segments */}
-      <div className="flex-1 p-4">
-        <div className="flex items-center justify-between mb-3">
-          <h4 className="text-md font-semibold text-gray-200">Segments</h4>
-          <button
-            onClick={onAddSegment}
-            className="text-xs px-2 py-1 rounded bg-slate-700 hover:bg-slate-600 text-gray-200 transition-colors"
-            title="Add a segment from current In/Out"
-          >
-            Add
-          </button>
-        </div>
-        
-        <div className="space-y-2">
-          {segments.map((segment) => {
-            const isActive = segment.id === activeSegmentId;
-            return (
-            <div 
-              key={segment.id}
-              className={[
-                'rounded px-3 py-2 text-sm border transition-colors',
-                isActive
-                  ? 'bg-blue-500/20 border-blue-500/40'
-                  : 'bg-emerald-500/20 border-emerald-500/30 hover:bg-emerald-500/25 cursor-pointer',
-              ].join(' ')}
-              onClick={() => onSelectSegment(segment.id)}
-            >
-              <div className="flex items-start justify-between gap-2">
-                <div className="min-w-0">
-                  <div className="text-gray-200 truncate" title={segment.name || segment.id}>
-                    {segment.name || 'Segment'}
-                    {isActive ? ' (active)' : ''}
-                  </div>
-                  <div className="text-gray-300">
-                    {formatTime(segment.start)} - {formatTime(segment.end)}
-                  </div>
-                </div>
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onDeleteSegment(segment.id);
-                  }}
-                  className="text-xs px-2 py-1 rounded bg-slate-700 hover:bg-slate-600 text-gray-200 transition-colors"
-                  title="Delete segment"
-                  disabled={segments.length <= 1}
-                >
-                  Delete
-                </button>
-              </div>
-              <div className={`text-xs mt-1 ${isActive ? 'text-blue-300' : 'text-emerald-400'}`}>
-                Duration: {formatTime(segment.end - segment.start)}
-              </div>
-            </div>
-          )})}
-        </div>
+      <p className="sidebar-hint">Select a clip to adjust its range.<br />Only the active clip is exported.</p>
+      <div className="clip-list">
+        {videoInfo ? segments.map((segment, index) => {
+          const active = segment.id === activeSegmentId;
+          return <div key={segment.id} className={`clip-row ${active ? 'active' : ''}`}>
+            <button className="clip-select" aria-pressed={active} onClick={() => onSelectSegment(segment.id)}>
+              <span className="clip-number">{String(index + 1).padStart(2, '0')}</span>
+              <span className="clip-copy"><strong>{segment.name || 'Untitled clip'}</strong><span className="mono">{formatTime(segment.end - segment.start)}</span>
+                <small className="mono">{formatTime(segment.start)} / {formatTime(segment.end)}</small></span>
+              {active && <ChevronRight size={15} />}
+            </button>
+            <button className="clip-delete icon-button" title={segments.length <= 1 ? 'Keep at least one clip' : 'Delete clip'} aria-label={`Delete ${segment.name || 'clip ' + (index + 1)}`} onClick={() => onDeleteSegment(segment.id)} disabled={segments.length <= 1}><Trash2 size={13} /></button>
+          </div>;
+        }) : <div className="sidebar-empty">Your clips will appear here.</div>}
       </div>
-    </div>
+      <details className="source-details">
+        <summary>Source information <span>{isLoadingVideo ? 'Reading...' : videoInfo?.video?.codec?.toUpperCase() || ''}</span></summary>
+        {videoInfo ? <dl>
+          <dt>Resolution</dt><dd>{videoInfo.video ? `${videoInfo.video.width} x ${videoInfo.video.height}` : 'Unknown'}</dd>
+          <dt>Frame rate</dt><dd>{videoInfo.video ? `${videoInfo.video.fps.toFixed(2)} fps` : 'Unknown'}</dd>
+          <dt>Duration</dt><dd className="mono">{formatTime(videoInfo.duration)}</dd>
+          <dt>File size</dt><dd>{formatFileSize(videoInfo.size)}</dd>
+          <dt>Bitrate</dt><dd>{videoInfo.bitrate > 0 ? `${Math.round(videoInfo.bitrate / 1000)} kb/s` : 'Unknown'}</dd>
+          <dt>Audio</dt><dd>{videoInfo.audio?.codec?.toUpperCase() || 'No audio'}</dd>
+        </dl> : <p className="muted">Open a video to inspect its metadata.</p>}
+      </details>
+    </aside>
   );
 };
-
 export default Sidebar;

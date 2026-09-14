@@ -8,6 +8,7 @@ import type { VideoInfo, ProjectData, ProjectDocument, EncoderPrefs } from '../t
 import { unwrapIpc } from '../utils/ipc';
 
 interface MainEditorProps {
+  isModalOpen?: boolean;
   onOpenExport: () => void;
   onOpenRemux: () => void;
   onVideoStateChange: (src: string, duration: number, inTime: number, outTime: number) => void;
@@ -91,6 +92,7 @@ const createProjectIdentity = (project?: Partial<ProjectData>) => ({
 });
 
 const MainEditor: React.FC<MainEditorProps> = ({
+  isModalOpen = false,
   onOpenExport,
   onOpenRemux,
   onVideoStateChange
@@ -581,17 +583,18 @@ const MainEditor: React.FC<MainEditorProps> = ({
   }, [videoSrc, duration, inTime, outTime, onVideoStateChange]);
 
   /* ---------------- Player callbacks ---------------- */
-  const formatTime = (seconds: number): string => {
+  const formatTime = useCallback((seconds: number): string => {
     const hours = Math.floor(seconds / 3600);
     const minutes = Math.floor((seconds % 3600) / 60);
     const secs = Math.floor(seconds % 60);
     const ms = Math.floor((seconds % 1) * 1000);
     return `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}.${ms.toString().padStart(3, '0')}`;
-  };
+  }, []);
 
   const handlePlayPause = () => setIsPlaying(!isPlaying);
 
   const handleFrameStep = useCallback((direction: 'forward' | 'backward') => {
+    setIsPlaying(false);
     const frameTime = 1 / (videoInfo?.video?.fps || 30);
     const newTime = direction === 'forward'
       ? Math.min(duration, currentTime + frameTime)
@@ -610,6 +613,8 @@ const MainEditor: React.FC<MainEditorProps> = ({
   /* ---------------- Keyboard shortcuts ---------------- */
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      if (isModalOpen || (e.target instanceof HTMLElement && e.target.closest('select, summary, [contenteditable="true"]'))) return;
+      if (e.target instanceof HTMLElement && e.target.closest('button') && ['Space', 'Enter'].includes(e.code)) return;
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
 
       if ((e.ctrlKey || e.metaKey) && e.key === 's') {
@@ -629,7 +634,7 @@ const MainEditor: React.FC<MainEditorProps> = ({
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [currentTime, handleFrameStep, handleSaveProject, handleSeek, setInForActive, setOutForActive]);
+  }, [currentTime, handleFrameStep, handleSaveProject, handleSeek, setInForActive, setOutForActive, isModalOpen]);
 
   const handleTimeUpdate = (time: number) => setCurrentTime(time);
 
@@ -703,9 +708,21 @@ const MainEditor: React.FC<MainEditorProps> = ({
         isSidebarCollapsed={isSidebarCollapsed}
       />
 
-      <div className="flex-1 flex overflow-hidden">
-        <div className="flex-1 p-6">
+      <div className="workspace-status">
+        <span className="source-name" title={currentVideoPath}>{currentVideoPath ? currentVideoPath.split(/[/\\]/).pop() : 'No source selected'}</span>
+        <span className="save-status" title={currentProjectPath || undefined}>{isLoadingVideo ? 'Reading source...' : !videoSrc ? 'Local files. No uploads.' : hasUnsavedChanges ? 'Unsaved changes' : currentProjectPath ? 'Project saved' : 'Ready'}</span>
+      </div>
+      {projectError && <div role="alert" className="notice error-notice">{projectError}</div>}
+      {showSaveBanner && !isSaveBannerDismissed && <div className="notice">
+        <span>Temporary video. Save a permanent copy to enable autosave.</span>
+        <button className="quiet-button" onClick={handleSaveProjectAs}>Save Video &amp; Project...</button>
+        <button className="icon-button" onClick={() => setIsSaveBannerDismissed(true)} aria-label="Dismiss temporary video notice"><X size={15} /></button>
+      </div>}
+      <div className="editor-workspace">
+        <div className="preview-region">
           <VideoPreview
+            isLoading={isLoadingVideo}
+            onOpen={handleLoadVideo}
             isPlaying={isPlaying}
             videoSrc={videoSrc}
             currentTime={currentTime}
@@ -733,8 +750,12 @@ const MainEditor: React.FC<MainEditorProps> = ({
         )}
       </div>
 
-      <div className="h-32 relative">
+      <div className="timeline-region">
         <Timeline
+          segments={videoSrc ? segments : []}
+          activeSegmentId={activeSegmentId}
+          onSelectSegment={handleSelectSegment}
+          onAddSegment={handleAddSegment}
           currentTime={currentTime}
           inTime={inTime}
           outTime={outTime}
@@ -745,39 +766,11 @@ const MainEditor: React.FC<MainEditorProps> = ({
           onInTimeChange={setInForActive}
           onOutTimeChange={setOutForActive}
           onPlayPause={handlePlayPause}
-          onExport={onOpenExport}
+          onExport={() => { setIsPlaying(false); onOpenExport(); }}
           formatTime={formatTime}
         />
       </div>
 
-      {hasUnsavedChanges && (
-        <div className="absolute top-16 right-4 bg-yellow-600 text-white px-3 py-1 rounded text-sm">
-          Unsaved changes
-        </div>
-      )}
-
-      {projectError && <div role="alert" className="absolute top-24 left-4 right-4 bg-red-900 text-white p-3 rounded">{projectError}</div>}
-
-      {showSaveBanner && !isSaveBannerDismissed && (
-        <div className="absolute top-16 left-1/2 transform -translate-x-1/2 bg-blue-600 text-white px-6 py-3 rounded-lg shadow-lg flex items-center space-x-4">
-          <span>This video is temporary. Save it to a permanent location to enable autosave.</span>
-          <div className="flex items-center space-x-2">
-            <button
-              onClick={handleSaveProjectAs}
-              className="bg-white text-blue-600 px-4 py-1 rounded font-medium hover:bg-gray-100 transition-colors"
-            >
-              Save Video & Project…
-            </button>
-            <button
-              onClick={() => setIsSaveBannerDismissed(true)}
-              className="p-1 hover:bg-blue-700 rounded transition-colors"
-              title="Dismiss"
-            >
-              <X size={16} className="text-white" />
-            </button>
-          </div>
-        </div>
-      )}
     </div>
   );
 };

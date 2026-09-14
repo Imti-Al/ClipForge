@@ -2,7 +2,6 @@ import { useState } from 'react';
 import MainEditor from './components/MainEditor';
 import { ExportModal } from './components/ExportModal';
 import RemuxModal from './components/RemuxModal';
-import './App.css';
 
 export type ModalType = 'export' | 'remux' | null;
 
@@ -25,8 +24,9 @@ function App() {
   };
 
   return (
-    <div className="h-screen bg-slate-700 text-gray-200 overflow-hidden">
+    <div className="app-shell">
       <MainEditor 
+        isModalOpen={activeModal !== null}
         onOpenExport={handleOpenExport}
         onOpenRemux={handleOpenRemux}
         onVideoStateChange={(src, _duration, inT, outT) => {
