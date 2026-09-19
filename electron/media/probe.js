@@ -1,6 +1,7 @@
-import { execFile } from 'node:child_process';
+import { execFile } from './probeProcesses.js';
 import { getFFmpegPath } from './binaries.js';
 import { cleanSafeFile } from '../paths.js';
+import { cancelled } from './jobs.js';
 
 const parseFrac = (s) => {
   if (!s || s === '0/0') return undefined;
@@ -8,12 +9,12 @@ const parseFrac = (s) => {
   return d ? n/d : undefined;
 };
 
-export const ffprobeJSON = (filePath) => new Promise((resolve, reject) => {
+export const ffprobeJSON = (filePath, signal) => new Promise((resolve, reject) => {
   const ffprobe = getFFmpegPath().ffprobe;
   execFile(ffprobe, ['-v','quiet','-print_format','json','-show_format','-show_streams', filePath],
-    { windowsHide: true, maxBuffer: 10 * 1024 * 1024 },
+    { windowsHide: true, maxBuffer: 10 * 1024 * 1024, timeout: 15000, signal },
     (err, stdout) => {
-      if (err) return reject(err);
+      if (err) return reject(signal?.aborted ? cancelled() : err);
       try { resolve(JSON.parse(stdout)); } catch (error) { reject(error); }
     }
   );

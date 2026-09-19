@@ -3,6 +3,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { getFFmpegPath } from './binaries.js';
 import { norm, cleanSafeFile } from '../paths.js';
+import { cancelled, checkCancelled } from './jobs.js';
 
 export async function assertOutputAvailable(inputPath, outputPath) {
   if (!inputPath || !outputPath) throw new Error('Input and output paths are required.');
@@ -18,14 +19,28 @@ export async function assertOutputAvailable(inputPath, outputPath) {
   throw new Error(`OUTPUT_EXISTS: ${outputPath} already exists. Choose a different output filename.`);
 }
 
-export function runFFmpeg(args, { duration, onProgress, remux = false, inputPath, pass = 1, passes = 1, progressState = {} }) {
+export function runFFmpeg(args, { duration, onProgress, remux = false, inputPath, pass = 1, passes = 1, progressState = {}, signal }) {
   return new Promise((resolve, reject) => {
+    checkCancelled(signal);
     const executable = getFFmpegPath().ffmpeg;
     console.log(remux ? 'FFmpeg remux command:' : 'FFmpeg command:', executable, args.join(' '));
     const child = spawn(executable, ['-progress', 'pipe:1', '-nostats', ...args], { windowsHide: true });
+    let killTimer;
+    const abort = () => {
+      killTimer = setTimeout(() => child.kill('SIGKILL'), 1000);
+      killTimer.unref?.();
+      child.kill();
+    };
+    const cleanup = () => {
+      clearTimeout(killTimer);
+      signal?.removeEventListener('abort', abort);
+    };
+    signal?.addEventListener('abort', abort, { once: true });
+    if (signal?.aborted) abort();
     let error = '';
     let buffer = '', record = {}, currentTime = 0, smoothSpeed = progressState.speed || 0, lastProgress = 0;
     const report = () => {
+      if (signal?.aborted) return;
       const time = Number(record.out_time_us ?? record.out_time_ms) / 1000000;
       if (Number.isFinite(time)) currentTime = Math.max(currentTime, Math.min(duration || Infinity, Math.max(0, time)));
       const speed = Number(String(record.speed || '').replace('x', ''));
@@ -54,7 +69,15 @@ export function runFFmpeg(args, { duration, onProgress, remux = false, inputPath
     child.stderr.on('data', data => {
       error = (error + data.toString()).slice(-65536);
     });
-    child.on('close', code => code === 0 ? resolve() : reject(new Error(`FFmpeg${remux ? ' remux' : ''} failed with code ${code}: ${error}`)));
-    child.on('error', err => reject(new Error(`Failed to start FFmpeg${remux ? ' for remux' : ''}: ${err.message}`)));
+    child.on('close', code => {
+      cleanup();
+      if (signal?.aborted) reject(cancelled());
+      else if (code === 0) resolve();
+      else reject(new Error(`FFmpeg${remux ? ' remux' : ''} failed with code ${code}: ${error}`));
+    });
+    child.on('error', err => {
+      cleanup();
+      reject(signal?.aborted ? cancelled() : new Error(`Failed to start FFmpeg${remux ? ' for remux' : ''}: ${err.message}`));
+    });
   });
 }

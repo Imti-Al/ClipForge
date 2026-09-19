@@ -61,6 +61,16 @@ export const ExportModal: React.FC<ExportModalProps> = ({
   const [capabilityNote, setCapabilityNote] = useState('Checking NVENC availability...');
   const [eta, setEta] = useState('');
   const [exportError, setExportError] = useState('');
+  const [status, setStatus] = useState('');
+  const activeJob = React.useRef<string | null>(null);
+  const [cancelling, setCancelling] = useState(false);
+
+  const cancelExport = async () => {
+    if (!activeJob.current) return;
+    setCancelling(true);
+    try { unwrapIpc(await window.electronAPI.cancelMediaJob(activeJob.current)); }
+    catch (error) { setExportError(String(error)); setCancelling(false); }
+  };
 
   useEffect(() => {
     if (!window.electronAPI) { setCapabilityNote('NVENC checking requires the desktop app.'); return; }
@@ -96,6 +106,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({
   }, [options.mode, options.targetSize, options.copyAudio, options.useGpu, videoSrc, inTime, outTime]);
 
   const handleExport = async () => {
+    if (activeJob.current) return;
     if (!window.electronAPI) {
       console.error('Electron API not available');
       return;
@@ -105,6 +116,8 @@ export const ExportModal: React.FC<ExportModalProps> = ({
     setProgress(0);
     setEta('');
     setExportError('');
+    setStatus('');
+    setCancelling(false);
 
     let removeProgressListener: (() => void) | null = null;
     try {
@@ -121,6 +134,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({
         return;
       }
       const exportOptions: ExportOptions = {
+        jobId: crypto.randomUUID(),
         inputPath: videoSrc,
         outputPath: options.outputPath,
         startTime: inTime,
@@ -133,9 +147,11 @@ export const ExportModal: React.FC<ExportModalProps> = ({
         useGPU: options.useGpu,
         copyAudio: options.copyAudio
       };
+      activeJob.current = exportOptions.jobId;
 
       // Listen for progress updates
       removeProgressListener = window.electronAPI.onExportProgress((progressData: ExportProgress) => {
+        if (progressData.jobId !== activeJob.current) return;
         setProgress(progressData.progress);
         if (progressData.etaSeconds !== undefined) {
           const remainingSeconds = progressData.etaSeconds;
@@ -149,13 +165,10 @@ export const ExportModal: React.FC<ExportModalProps> = ({
       
       if (result.success) {
         setProgress(100);
-        setTimeout(() => {
-          removeProgressListener?.();
-          onClose();
-        }, 1000);
+        onClose();
       } else {
-        console.error('Export failed');
-        setExportError(result.error);
+        if (result.code === 'CANCELLED') setStatus('Export cancelled. No output was saved.');
+        else setExportError(result.error);
         setIsExporting(false);
         removeProgressListener?.();
       }
@@ -164,6 +177,11 @@ export const ExportModal: React.FC<ExportModalProps> = ({
       setExportError(error instanceof Error ? error.message : String(error));
       setIsExporting(false);
       removeProgressListener?.();
+    } finally {
+      removeProgressListener?.();
+      activeJob.current = null;
+      setIsExporting(false);
+      setCancelling(false);
     }
   };
 
@@ -199,10 +217,12 @@ export const ExportModal: React.FC<ExportModalProps> = ({
     <Dialog title="Export selection" eyebrow="MAKE IT READY TO SHARE" busy={isExporting} onClose={onClose}
       footer={<>
         <span className="footer-note"><strong>{estimatedSize}</strong><small>{isExporting ? 'Keep ClipForge open until finished.' : options.mode === 'target' ? 'Approximate final size, not a guarantee.' : 'Your source file stays untouched.'}</small></span>
+        {isExporting && <button onClick={cancelExport} disabled={cancelling} className="quiet-button">{cancelling ? 'Cancelling...' : 'Cancel'}</button>}
         <button onClick={handleExport} disabled={isExporting || !options.outputPath || !options.filename} className="primary-button"><Play size={15} />{isExporting ? 'Exporting...' : 'Start Export'}</button>
       </>}>
       <div className="export-source"><span className="truncate" title={videoSrc}>{getBasename(videoSrc)}</span><span className="mono">{formatTime(outTime - inTime)} selected</span></div>
       {exportError && <div role="alert" className="error-box">{exportError}</div>}
+      {status && <p role="status">{status}</p>}
       <fieldset disabled={isExporting} hidden={isExporting} className="export-settings">
         <div className="mode-choices" aria-label="Compression mode">
           <button type="button" className={options.mode === 'crf' ? 'selected' : ''} aria-pressed={options.mode === 'crf'} onClick={() => setOptions(prev => ({ ...prev, mode: 'crf' }))}><strong>Quality</strong><span>Keep the detail you need</span></button>

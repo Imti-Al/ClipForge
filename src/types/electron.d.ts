@@ -3,6 +3,8 @@ export type IpcResult<T> = { success: true; data: T } | { success: false; error:
 export type ProjectDocument = Partial<ProjectData>;
 
 export interface ElectronAPI {
+  closeWindow: (approved: boolean) => Promise<IpcResult<void>>;
+  onCloseRequested: (callback: () => void) => () => void;
   // File operations
   openVideoDialog: () => Promise<IpcResult<string | null>>;
   showOpenProjectDialog: () => Promise<IpcResult<string | null>>;
@@ -16,7 +18,11 @@ export interface ElectronAPI {
   getVideoInfo: (videoPath: string) => Promise<IpcResult<VideoInfo>>;
   
   // Import operations (updated to reflect success/error)
-  importBlob: (bytes: ArrayBuffer | Uint8Array, name: string) => Promise<IpcResult<{ tempPath: string; isTemp: true }>>;
+  beginImport: (id: string, name: string, size: number) => Promise<IpcResult<{ chunkBytes: number }>>;
+  writeImportChunk: (id: string, offset: number, bytes: ArrayBuffer) => Promise<IpcResult<void>>;
+  finishImport: (id: string) => Promise<IpcResult<{ tempPath: string; isTemp: true }>>;
+  abortImport: (id: string) => Promise<IpcResult<boolean>>;
+  cancelMediaJob: (jobId: string) => Promise<IpcResult<boolean>>;
   isTempImport: (srcPath: string) => Promise<IpcResult<boolean>>;
   moveFile: (src: string, dst: string) => Promise<IpcResult<{ dst: string }>>;
   
@@ -63,6 +69,7 @@ export interface VideoInfo {
 }
 
 export interface ExportOptions {
+  jobId: string;
   inputPath: string;
   outputPath: string;
   startTime: number;
@@ -87,6 +94,7 @@ export interface ExportEstimate {
 }
 
 export interface ExportProgress {
+  jobId: string;
   progress: number;
   currentTime: number;
   speed: number;
@@ -96,12 +104,14 @@ export interface ExportProgress {
 }
 
 export interface RemuxOptions {
+  jobId: string;
   inputPath: string;
   outputPath: string;
   duration?: number;
 }
 
 export interface RemuxProgress {
+  jobId: string;
   inputPath: string;
   currentTime: number;
   speed: number;

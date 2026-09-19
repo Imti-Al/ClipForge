@@ -14,7 +14,7 @@ function harness(extra = {}) {
   const commands = [], children = [], removed = [];
   let directories = 0;
   const loaded = mainContext({
-    fs: { lstat: missing, mkdtemp: async prefix => `${prefix}${++directories}`, rm: async dir => removed.push(dir) },
+    fs: { lstat: missing, link: async () => {}, mkdtemp: async prefix => `${prefix}${++directories}`, rm: async dir => removed.push(dir) },
     execFile: (_exe, args, _opts, done) => done(null, args.includes('-show_streams') ? JSON.stringify(audioInfo) : '', ''),
     spawn: (_exe, args) => { commands.push(args); const proc = child(); children.push(proc); return proc; },
     ...extra,
@@ -51,10 +51,10 @@ test('two-pass export is one promise; shares unique log scope, trims both passes
   assert.equal(events[1].progress, 99); assert.equal(resolved, false);
   assert.equal(events[1].speed, 1.8);
   h.children[1].emit('close', 0); await operation;
-  assert.equal(resolved, true); assert.equal(h.removed.length, 1);
+  assert.equal(resolved, true); assert.equal(h.removed.length, 2);
   for (const args of h.commands) {
     assert.equal(args[args.indexOf('-ss') + 1], '3'); assert.equal(args[args.indexOf('-t') + 1], '8');
-    assert.ok(args[args.indexOf('-passlogfile') + 1].startsWith(h.removed[0]));
+    assert.ok(args[args.indexOf('-passlogfile') + 1].startsWith(h.removed.find(dir => dir.includes('clipforge-pass-'))));
   }
   assert.ok(h.commands[0].includes('-an')); assert.ok(h.commands[1].includes('-n'));
 });
@@ -66,7 +66,7 @@ test('pass failures and a collision appearing during pass 1 reject and clean log
     await tick();
     if (failPass === 2) { h.children[0].emit('close', 0); await tick(); }
     h.children[failPass - 1].emit('close', 1); await rejection;
-    assert.equal(h.removed.length, 1); assert.equal(h.children.length, failPass);
+    assert.equal(h.removed.length, failPass); assert.equal(h.children.length, failPass);
   }
   let checks = 0;
   const h = harness({ fs: { lstat: async () => ++checks === 1 ? missing() : {},
@@ -86,7 +86,7 @@ test('simultaneous two-pass exports never share passlog directories', async () =
   assert.notEqual(logs[0], logs[1]);
   h.children[0].emit('close', 0); h.children[1].emit('close', 0); await tick();
   h.children[2].emit('close', 0); h.children[3].emit('close', 0);
-  await Promise.all([first, second]); assert.equal(new Set(h.removed).size, 2);
+  await Promise.all([first, second]); assert.equal(new Set(h.removed).size, 4);
 });
 
 test('structured progress survives split lines, smooths speed, clamps regressions and bounds errors', async () => {

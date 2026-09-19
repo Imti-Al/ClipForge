@@ -6,7 +6,7 @@ const ts = require('typescript');
 
 function editor(api) {
   // Adapt the existing scenario fixtures to the standardized transport envelope.
-  const transportedApi = Object.fromEntries(Object.entries(api).map(([name, fn]) => [name, async (...args) => {
+  const transportedApi = Object.fromEntries(Object.entries(api).map(([name, fn]) => [name, name === 'getPathForFile' ? fn : async (...args) => {
     const result = await fn(...args);
     if (result?.success === false) return { ...result, code: 'REQUEST_FAILED' };
     if (name === 'projectOpenSidecar') return result;
@@ -16,7 +16,9 @@ function editor(api) {
   let slots = [], cursor = 0;
   let isModalOpen = false;
   let effects = [], clock = 0, nextTimer = 0, closed = false;
+  transportedApi.closeWindow = async approved => { closed = approved; return { success: true }; };
   const timers = new Map(), listeners = new Map();
+  transportedApi.onCloseRequested = callback => { listeners.set('closeRequested', callback); return () => listeners.delete('closeRequested'); };
   const equalDeps = (a, b) => a && b && a.length === b.length && a.every((value, i) => Object.is(value, b[i]));
   const react = {
     useState(init) {
@@ -46,12 +48,16 @@ function editor(api) {
   vm.runInNewContext(ts.transpileModule(fs.readFileSync('src/utils/ipc.ts', 'utf8'), {
     compilerOptions: { module: ts.ModuleKind.CommonJS }
   }).outputText, { exports: ipcExports });
+  const importExports = {};
+  vm.runInNewContext(ts.transpileModule(fs.readFileSync('src/utils/importBlob.ts', 'utf8'), {
+    compilerOptions: { module: ts.ModuleKind.CommonJS }
+  }).outputText, { exports: importExports, require: () => ipcExports, crypto: require('node:crypto').webcrypto });
   const code = ts.transpileModule(fs.readFileSync('src/components/MainEditor.tsx', 'utf8'), {
     compilerOptions: { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.React }
   }).outputText;
   vm.runInNewContext(code, {
     HTMLElement: class {}, HTMLInputElement: class {}, HTMLTextAreaElement: class {},
-    exports, require: name => name === 'react' ? react : name === '../utils/ipc' ? ipcExports : { default: name, X: 'X' },
+    exports, require: name => name === 'react' ? react : name === '../utils/ipc' ? ipcExports : name === '../utils/importBlob' ? importExports : { default: name, X: 'X' },
     window: { electronAPI: transportedApi, addEventListener: (name, fn) => listeners.set(name, fn), removeEventListener: name => listeners.delete(name), close: () => { closed = true; } }, console,
     setTimeout: (fn, delay) => { const id = ++nextTimer; timers.set(id, { fn, due: clock + delay }); return id; },
     clearTimeout: id => timers.delete(id),
@@ -64,10 +70,72 @@ function editor(api) {
     props(type) { return this.render().find(node => node.type === './' + type).props; },
     async advance(ms) { clock += ms; for (const [id, timer] of [...timers]) if (timer.due <= clock) { timers.delete(id); timer.fn(); } await new Promise(resolve => setImmediate(resolve)); },
     close() { listeners.get('beforeunload')({ preventDefault() {}, returnValue: '' }); },
+    nativeClose() { listeners.get('closeRequested')(); },
     get closed() { return closed; },
+    drop(file) { return this.render()[0].props.onDrop({ preventDefault() {}, stopPropagation() {}, dataTransfer: { files: [file], items: [], getData: () => '' } }); },
     changePreferences(update) { const i = slots.findIndex(value => value && value.copyAudio !== undefined && value.preset); slots[i] = { ...slots[i], ...update }; },
   };
 }
+
+test('rapid A to B opens suppress stale metadata, errors, and old preview callbacks', async () => {
+  for (const fails of [false, true]) {
+    let resolveA, rejectA, count = 0;
+    const app = editor(tempApi({ openVideoDialog: async () => ++count === 1 ? 'A.mp4' : 'B.mp4',
+      getVideoInfo: source => source === 'A.mp4' ? new Promise((resolve, reject) => { resolveA = resolve; rejectA = reject; }) : Promise.resolve({ duration: 25 }),
+    }));
+    const a = app.props('MenuBar').onLoadVideo(); await app.advance(0);
+    await app.props('MenuBar').onLoadVideo();
+    if (fails) rejectA(new Error('obsolete failure')); else resolveA({ duration: 600 });
+    await a;
+    assert.equal(app.props('VideoPreview').videoSrc, 'safe-file:B.mp4');
+    assert.equal(app.props('Timeline').duration, 25);
+    assert.equal(app.render().some(node => node.props.role === 'alert'), false);
+    const oldPreview = app.props('VideoPreview');
+    await app.props('MenuBar').onLoadVideo(); oldPreview.onTimeUpdate(999);
+    assert.equal(app.props('Timeline').currentTime, 0);
+  }
+});
+
+test('stale sidecar and open-project dialog completions cannot replace a newer source', async () => {
+  let readA, picker, path = 'A.mp4';
+  const app = editor(tempApi({ openVideoDialog: async () => path, isTempImport: async () => false,
+    projectDefaultPath: async source => source + '.clipforge', projectExists: async source => source.startsWith('A'),
+    projectOpenSidecar: () => new Promise(resolve => { readA = resolve; }),
+    showOpenProjectDialog: () => new Promise(resolve => { picker = resolve; }),
+    projectSaveFile: async () => ({ success: true }),
+  }));
+  const a = app.props('MenuBar').onLoadVideo(); await app.advance(0);
+  path = 'B.mp4'; await app.props('MenuBar').onLoadVideo();
+  readA({ success: true, data: { segments: [{ id: 'old', start: 8, end: 11 }] } }); await a;
+  assert.equal(app.props('VideoPreview').videoSrc, 'safe-file:B.mp4');
+  assert.equal(app.props('Timeline').inTime, 0);
+  const project = app.props('MenuBar').onOpenProject();
+  path = 'C.mp4'; await app.props('MenuBar').onLoadVideo();
+  picker('obsolete.clipforge'); await project;
+  assert.equal(app.props('VideoPreview').videoSrc, 'safe-file:C.mp4');
+});
+
+test('current load errors remain visible and normal path-backed drops never copy media', async () => {
+  let probes = 0;
+  const app = editor(tempApi({ getPathForFile: () => 'C:/original.mp4', getVideoInfo: async () => {
+    if (++probes > 1) throw new Error('Current probe failed'); return { duration: 7 };
+  }, beginImport: () => { throw new Error('Path backed video must not be copied'); } }));
+  await app.drop({ name: 'original.mp4', arrayBuffer() { throw new Error('Must not buffer'); } });
+  assert.equal(app.props('VideoPreview').videoSrc, 'safe-file:C:/original.mp4');
+  await app.props('MenuBar').onLoadVideo();
+  assert.ok(app.render().some(node => node.props.role === 'alert' && node.children.some(text => /Current probe failed/.test(text))));
+  assert.equal(app.props('VideoPreview').videoSrc, 'safe-file:C:/original.mp4');
+});
+
+test('a stalled close flush leaves the editor open with a recoverable error instead of hanging silently', async () => {
+  const app = editor(tempApi({ isTempImport: async () => false, projectExists: async () => false,
+    projectSaveFile: async () => new Promise(() => {}),
+  }));
+  await app.props('MenuBar').onLoadVideo(); app.render();
+  app.nativeClose(); await app.advance(5001);
+  assert.equal(app.closed, false);
+  assert.ok(app.render().some(node => node.props.role === 'alert' && node.children.some(text => /taking too long/.test(text))));
+});
 
 function tempApi(overrides = {}) {
   return {

@@ -35,7 +35,7 @@ test('preload, canonical handlers and TypeScript API expose the same contract', 
   const ast = ts.createSourceFile('electron.d.ts', fs.readFileSync('src/types/electron.d.ts', 'utf8'), ts.ScriptTarget.Latest, true);
   const declaration = ast.statements.find(node => ts.isInterfaceDeclaration(node) && node.name.text === 'ElectronAPI');
   assert.deepEqual(Object.keys(api).sort(), declaration.members.map(member => member.name.text).sort());
-  const local = ['platform', 'getPathForFile', 'onExportProgress', 'onRemuxProgress'];
+  const local = ['platform', 'getPathForFile', 'onExportProgress', 'onRemuxProgress', 'onCloseRequested'];
   assert.deepEqual(Object.keys(api).filter(name => !local.includes(name)).sort(), [...backend.handlers.keys()].sort());
   assert.ok([...backend.handlers.keys()].every(name => /^[a-z][A-Za-z]+$/.test(name)));
   for (const name of ['openVideoDialog', 'showOpenProjectDialog', 'showSaveProjectDialog', 'showSaveVideoDialogForSource', 'showSaveVideoDialog']) {

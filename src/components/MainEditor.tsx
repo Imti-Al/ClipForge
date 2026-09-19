@@ -6,6 +6,7 @@ import Sidebar from './Sidebar';
 import { X } from 'lucide-react';
 import type { VideoInfo, ProjectData, ProjectDocument, EncoderPrefs } from '../types/electron';
 import { unwrapIpc } from '../utils/ipc';
+import { importBlobFile } from '../utils/importBlob';
 
 interface MainEditorProps {
   isModalOpen?: boolean;
@@ -137,6 +138,19 @@ const MainEditor: React.FC<MainEditorProps> = ({
   const pendingSaves = React.useRef(new Set<Promise<boolean>>());
   const transitionRef = React.useRef(false);
   const allowClose = React.useRef(false);
+  const loadGeneration = React.useRef(0);
+  const loading = React.useRef(false);
+  const beginLoad = () => {
+    if (transitionRef.current) return null;
+    loading.current = true;
+    setIsLoadingVideo(true);
+    setProjectError('');
+    return ++loadGeneration.current;
+  };
+  const currentLoad = (token: number) => token === loadGeneration.current;
+  const finishLoad = (token: number) => {
+    if (currentLoad(token)) { loading.current = false; setIsLoadingVideo(false); }
+  };
 
   const buildSignature = useCallback((sigIn: number, sigOut: number, sigPrefs: EncoderPrefs, sigSegments = segments, sigActiveId = activeSegmentId) => {
     // Intentionally excludes playhead/currentTime to avoid autosaving constantly during playback.
@@ -336,117 +350,100 @@ const MainEditor: React.FC<MainEditorProps> = ({
   }, [currentSignature, currentProjectPath, currentVideoPath, isInitialized, isTempImport, persistProject, saveRevision]);
 
   useEffect(() => {
-    const beforeClose = (event: BeforeUnloadEvent) => {
+    const beforeClose = (event?: BeforeUnloadEvent) => {
       if (allowClose.current) return;
-      event.preventDefault();
-      event.returnValue = '';
-      if (transitionRef.current) return;
+      event?.preventDefault();
+      if (event) event.returnValue = '';
+      if (transitionRef.current) {
+        void window.electronAPI?.closeWindow(false);
+        return;
+      }
       transitionRef.current = true;
-      void flushProject().then(saved => {
+      loadGeneration.current++;
+      loading.current = false;
+      setIsLoadingVideo(false);
+      let timer: ReturnType<typeof setTimeout>;
+      const timeout = new Promise<boolean>(resolve => {
+        timer = setTimeout(() => {
+          setProjectError('Project save is taking too long. ClipForge stayed open to protect your edits. Try closing again once the save finishes.');
+          resolve(false);
+        }, 5000);
+      });
+      void Promise.race([flushProject(), timeout]).then(saved => {
+        clearTimeout(timer);
         transitionRef.current = false;
-        if (saved) {
-          allowClose.current = true;
-          window.close();
-        }
+        allowClose.current = saved;
+        if (window.electronAPI) {
+          void window.electronAPI.closeWindow(saved).then(unwrapIpc).catch(error => {
+            allowClose.current = false;
+            setProjectError(String(error));
+          });
+        } else if (saved) window.close();
       });
     };
     window.addEventListener('beforeunload', beforeClose);
-    return () => window.removeEventListener('beforeunload', beforeClose);
+    const unsubscribe = window.electronAPI?.onCloseRequested(() => beforeClose());
+    return () => { window.removeEventListener('beforeunload', beforeClose); unsubscribe?.(); };
   }, [flushProject]);
+
+  useEffect(() => () => { loadGeneration.current++; }, []);
 
   /* ---------------- Delete-on-exit sync ---------------- */
   useEffect(() => {
+    let active = true;
     if (window.electronAPI && currentProjectPath && !isTempImport) {
       void window.electronAPI.projectSetDeleteOnExit(currentProjectPath, deleteProjectOnExit)
-        .then(unwrapIpc).catch(error => setProjectError(String(error)));
+        .then(unwrapIpc).catch(error => { if (active) setProjectError(String(error)); });
+      return () => { active = false; };
     }
   }, [currentProjectPath, deleteProjectOnExit, isTempImport]);
 
-  /* ---------------- Open .llc ---------------- */
-  const loadProject = async (projectPath: string) => {
-    if (!window.electronAPI) return;
-    try {
-      const result = await window.electronAPI.projectOpenSidecar(projectPath);
-      if (!result.success) throw new Error(result.error);
-      if (result.data?.sourceVideo?.path) {
-        await loadFromPath(result.data.sourceVideo.path, {
-          projectData: result.data,
-          projectPath
-        });
-      } else {
-        throw new Error('Project does not contain a source video path.');
-      }
-    } catch (error) {
-      console.error('Load project error:', error);
-      setProjectError(error instanceof Error ? error.message : String(error));
-    }
-  };
-
-  /* ---------------- Unified "open video by path" ---------------- */
+  /* ---------------- Source loading ---------------- */
   const loadFromPath = async (
-    filePath: string,
+    filePath: string, token: number,
     options?: { projectData?: ProjectDocument; projectPath?: string }
   ) => {
-    if (!window.electronAPI) return;
-
-    if (transitionRef.current) return;
-    transitionRef.current = true;
-    if (!await flushProject()) { transitionRef.current = false; return; }
-    resetEditorState();
-
+    if (!currentLoad(token) || !window.electronAPI) return;
     try {
-      // Check if temp import
+      if (!await flushProject() || !currentLoad(token)) return;
       const isTemp = unwrapIpc(await window.electronAPI.isTempImport(filePath));
-      setIsTempImport(isTemp);
-
-      // Get video info with ffprobe
+      if (!currentLoad(token)) return;
       const info = unwrapIpc(await window.electronAPI.getVideoInfo(filePath));
+      if (!currentLoad(token)) return;
       if (!Number.isFinite(info.duration) || info.duration <= 0) throw new Error('Could not determine a valid video duration.');
+      let project = options?.projectData;
+      let projectPath = options?.projectPath || '';
+      if (!isTemp && !projectPath) {
+        projectPath = unwrapIpc(await window.electronAPI.projectDefaultPath(filePath));
+        if (!currentLoad(token)) return;
+        const exists = unwrapIpc(await window.electronAPI.projectExists(projectPath));
+        if (!currentLoad(token)) return;
+        if (exists) project = unwrapIpc(await window.electronAPI.projectOpenSidecar(projectPath));
+      }
+      if (!currentLoad(token)) return;
+      // Keep the old source intact until all new source work and any intervening edits are saved.
+      if (!await flushProject() || !currentLoad(token)) return;
+      resetEditorState();
+      setIsTempImport(isTemp);
       setSegments([{ id: DEFAULT_SEGMENT_ID, start: 0, end: info.duration, name: 'Main segment' }]);
       setVideoInfo(info);
       setDuration(info.duration);
-      setInTime(0);
       setOutTime(info.duration);
-      setCurrentTime(0);
       setCurrentVideoPath(filePath);
-
       if (isTemp) {
-        // Temporary file: show banner and create default segment
-        setProjectIdentity(createProjectIdentity(options?.projectData));
+        setProjectIdentity(createProjectIdentity(project));
         setShowSaveBanner(true);
+      } else if (project) {
+        applyProjectData(project, info, projectPath);
       } else {
-        const explicitProject = options?.projectData;
-        const explicitProjectPath = options?.projectPath;
-
-        if (explicitProject && explicitProjectPath) {
-          applyProjectData(explicitProject, info, explicitProjectPath);
-        } else {
-          // Permanent file: check for existing project
-          const projectPath = unwrapIpc(await window.electronAPI.projectDefaultPath(filePath));
-          const exists = unwrapIpc(await window.electronAPI.projectExists(projectPath));
-
-          if (exists) {
-            const open = await window.electronAPI.projectOpenSidecar(projectPath);
-            if (open.success) {
-              applyProjectData(open.data, info, projectPath);
-            } else {
-              throw new Error(open.error || 'Project could not be read; it has not been overwritten.');
-            }
-          } else {
-            setProjectIdentity(createProjectIdentity());
-            setCurrentProjectPath(projectPath);
-          }
-        }
+        setCurrentProjectPath(projectPath);
       }
       setVideoSrc(`safe-file:${filePath}`);
-    } catch (error) {
-      setProjectError(error instanceof Error ? error.message : String(error));
-      console.error('Failed to load video:', error);
-    } finally {
-      transitionRef.current = false;
-      setIsLoadingVideo(false);
       setIsInitialized(true);
-    }
+      return true;
+    } catch (error) {
+      if (currentLoad(token)) setProjectError(error instanceof Error ? error.message : String(error));
+    } finally { finishLoad(token); }
   };
 
   /* ---------------- Save helpers ---------------- */
@@ -456,7 +453,7 @@ const MainEditor: React.FC<MainEditorProps> = ({
 
   const handleSaveProjectAs = useCallback(async () => {
     if (!window.electronAPI) return;
-    if (!currentVideoPath || transitionRef.current) return;
+    if (!currentVideoPath || transitionRef.current || loading.current) return;
     transitionRef.current = true;
     clearTimeout(autosaveTimer.current);
     let failed = false;
@@ -531,10 +528,18 @@ const MainEditor: React.FC<MainEditorProps> = ({
 
   const handleOpenProject = async () => {
     if (!window.electronAPI) return;
+    const token = beginLoad();
+    if (token === null) return;
     try {
       const projectPath = unwrapIpc(await window.electronAPI.showOpenProjectDialog());
-      if (projectPath) await loadProject(projectPath);
-    } catch (error) { setProjectError(error instanceof Error ? error.message : String(error)); }
+      if (!projectPath || !currentLoad(token)) return;
+      const project = unwrapIpc(await window.electronAPI.projectOpenSidecar(projectPath));
+      if (!currentLoad(token)) return;
+      if (!project.sourceVideo?.path) throw new Error('Project does not contain a source video path.');
+      await loadFromPath(project.sourceVideo.path, token, { projectData: project, projectPath });
+    } catch (error) {
+      if (currentLoad(token)) setProjectError(error instanceof Error ? error.message : String(error));
+    } finally { finishLoad(token); }
   };
 
   const handleToggleDeleteProjectOnExit = () => setDeleteProjectOnExit(!deleteProjectOnExit);
@@ -636,7 +641,10 @@ const MainEditor: React.FC<MainEditorProps> = ({
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [currentTime, handleFrameStep, handleSaveProject, handleSeek, setInForActive, setOutForActive, isModalOpen]);
 
-  const handleTimeUpdate = (time: number) => setCurrentTime(time);
+  const previewSession = sessionRef.current;
+  const handleTimeUpdate = (time: number) => {
+    if (previewSession === sessionRef.current) setCurrentTime(time);
+  };
 
   const handleLoadedMetadata = () => {
     // Probed duration and restored ranges are authoritative; browser metadata must not reset them.
@@ -646,44 +654,41 @@ const MainEditor: React.FC<MainEditorProps> = ({
   /* ---------------- Open video via dialog ---------------- */
   const handleLoadVideo = async () => {
     if (!window.electronAPI) return;
+    const token = beginLoad();
+    if (token === null) return;
     try {
       const filePath = unwrapIpc(await window.electronAPI.openVideoDialog());
-      if (filePath) await loadFromPath(filePath);
+      if (filePath && currentLoad(token)) await loadFromPath(filePath, token);
     } catch (error) {
-      console.error('Failed to open video:', error);
-    }
+      if (currentLoad(token)) setProjectError(error instanceof Error ? error.message : String(error));
+    } finally { finishLoad(token); }
   };
 
   /* ---------------- Drag & Drop ---------------- */
   const handleDragOver = (e: React.DragEvent) => { e.preventDefault(); e.stopPropagation(); };
-
   const handleDrop = async (e: React.DragEvent) => {
     e.preventDefault(); e.stopPropagation();
     if (!window.electronAPI) return;
-
-    // Try to get file path from drag data
-    let p = pathFromDrop(e);
-
-    // If no path but we have files, handle as blob import
-    if (!p && e.dataTransfer.files?.length) {
-      const f = pickVideoFile(e.dataTransfer.files);
-      if (!f) return;
-      try {
-        const buf = new Uint8Array(await f.arrayBuffer());
-        const res = await window.electronAPI.importBlob(buf, f.name);
-        if (res.success) {
-          p = res.data.tempPath;
-        } else {
-          console.error('Failed to import blob:', res.error);
-          return;
+    const token = beginLoad();
+    if (token === null) return;
+    let imported: { id: string; tempPath: string } | undefined;
+    let loaded = false;
+    try {
+      let source = pathFromDrop(e);
+      if (!source && e.dataTransfer.files?.length) {
+        const file = pickVideoFile(e.dataTransfer.files);
+        if (file) {
+          imported = await importBlobFile(window.electronAPI, file, () => currentLoad(token));
+          source = imported?.tempPath || null;
         }
-      } catch (error) {
-        console.error('Failed to import blob:', error);
-        return;
       }
+      if (source && currentLoad(token)) loaded = !!await loadFromPath(source, token);
+    } catch (error) {
+      if (currentLoad(token)) setProjectError(error instanceof Error ? error.message : String(error));
+    } finally {
+      if (imported && !loaded) await window.electronAPI.abortImport(imported.id);
+      finishLoad(token);
     }
-    
-    if (p) await loadFromPath(p);
   };
 
   /* ---------------- Render ---------------- */
@@ -721,6 +726,7 @@ const MainEditor: React.FC<MainEditorProps> = ({
       <div className="editor-workspace">
         <div className="preview-region">
           <VideoPreview
+            key={currentVideoPath}
             isLoading={isLoadingVideo}
             onOpen={handleLoadVideo}
             isPlaying={isPlaying}

@@ -30,7 +30,7 @@ function mainContext(overrides = {}) {
     const module = { exports: {} };
     const context = vm.createContext({
       module, exports: module.exports, console, Buffer, URL, process: dependencies.process,
-      setTimeout, clearTimeout,
+      setTimeout: overrides.setTimeout || setTimeout, clearTimeout: overrides.clearTimeout || clearTimeout, AbortController,
       require: name => name in mocks ? mocks[name] : name.startsWith('.')
         ? load(path.relative(path.resolve('electron'), path.resolve(path.dirname(filename), name))) : require(name),
     });

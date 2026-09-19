@@ -1,4 +1,4 @@
-import { execFile } from 'node:child_process';
+import { execFile } from './probeProcesses.js';
 import { getFFmpegPath } from './binaries.js';
 
 let capabilityPromise;

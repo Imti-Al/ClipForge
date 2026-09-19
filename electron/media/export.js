@@ -6,6 +6,8 @@ import { ffprobeJSON } from './probe.js';
 import { assertOutputAvailable, runFFmpeg } from './ffmpegRunner.js';
 import { AAC_BITRATE, targetBudget } from './budget.js';
 import { getEncoderCapabilities } from './capabilities.js';
+import { withOutput } from './output.js';
+import { checkCancelled } from './jobs.js';
 
 function normalized(options) {
   return { ...options,
@@ -18,7 +20,8 @@ export async function getExportEstimate(options) {
   return targetBudget(normalized(options), await ffprobeJSON(cleanSafeFile(options.inputPath)));
 }
 
-export async function exportVideo(options, onProgress) {
+export async function exportVideo(options, onProgress, signal) {
+  checkCancelled(signal);
   const settings = normalized(options);
   const { duration, startTime, mode, copyAudio, useGPU } = settings;
   const inputPath = cleanSafeFile(options.inputPath);
@@ -29,7 +32,7 @@ export async function exportVideo(options, onProgress) {
   if (!Number.isFinite(duration) || duration <= 0) throw new Error('Invalid export duration (segment length must be > 0)');
   if (!['crf', 'target', 'targetSize'].includes(mode)) throw new Error('Unsupported export mode.');
   const target = mode !== 'crf';
-  const info = target || (copyAudio && format === 'mp4') ? await ffprobeJSON(inputPath) : null;
+  const info = target || (copyAudio && format === 'mp4') ? await ffprobeJSON(inputPath, signal) : null;
   const audio = info?.streams?.find(stream => stream.codec_type === 'audio');
   if (copyAudio && format === 'mp4' && audio && !['aac', 'mp3', 'ac3', 'eac3', 'alac'].includes(audio.codec_name)) {
     throw new Error('This audio codec cannot be copied into MP4 by ClipForge. Disable Copy Audio Stream or choose MKV.');
@@ -39,6 +42,7 @@ export async function exportVideo(options, onProgress) {
     if (!capabilities.nvenc) throw new Error(`${capabilities.reason} Use CPU encoding instead.`);
   }
   const budget = target ? targetBudget(settings, info) : null;
+  checkCancelled(signal);
   const preset = String(options.preset || 'medium').toLowerCase();
   const nvencPreset = { ultrafast: 'p1', superfast: 'p2', veryfast: 'p3', faster: 'p4', fast: 'p4', medium: 'p5', slow: 'p6', slower: 'p7', veryslow: 'p7' }[preset] || 'p5';
   const trim = ['-i', inputPath, '-map', '0:v:0'];
@@ -64,12 +68,13 @@ export async function exportVideo(options, onProgress) {
       passDirectory = await fs.mkdtemp(path.join(os.tmpdir(), 'clipforge-pass-'));
       passArgs = ['-passlogfile', path.join(passDirectory, 'video')];
       await runFFmpeg([...trim, ...video, ...passArgs, '-pass', '1', '-an', '-f', 'null', '-'],
-        { duration, onProgress, pass: 1, passes: 2, progressState });
+        { duration, onProgress, pass: 1, passes: 2, progressState, signal });
     }
     // Repeat immediately before output creation, including after the analysis pass.
     await assertOutputAvailable(inputPath, outputPath);
-    await runFFmpeg([...trim, ...video, ...passArgs, ...(twoPass ? ['-pass', '2'] : []), ...output],
-      { duration, onProgress, pass: twoPass ? 2 : 1, passes: twoPass ? 2 : 1, progressState });
+    await withOutput(outputPath, signal, temporaryPath => runFFmpeg(
+      [...trim, ...video, ...passArgs, ...(twoPass ? ['-pass', '2'] : []), ...output.slice(0, -1), temporaryPath],
+      { duration, onProgress, pass: twoPass ? 2 : 1, passes: twoPass ? 2 : 1, progressState, signal }));
   } finally {
     if (passDirectory) await fs.rm(passDirectory, { recursive: true, force: true });
   }

@@ -1,5 +1,9 @@
 import { registerRequest } from './ipc.js';
-import { TEMP_IMPORT_DIR, isTempImportPath, importBlob, moveFile, cleanupOldTempFiles } from './files.js';
+import { TEMP_IMPORT_DIR, isTempImportPath, moveFile, cleanupOldTempFiles } from './files.js';
+import { createImportStore } from './imports.js';
+import { createJobManager } from './media/jobs.js';
+import { stopProbes } from './media/probeProcesses.js';
+import { randomUUID } from 'node:crypto';
 import { PROJECT_EXT, sidecarPathForSource } from './projects/paths.js';
 import { createProjectStore } from './projects/store.js';
 import { cleanSafeFile } from './paths.js';
@@ -21,6 +25,10 @@ const isDev = !app.isPackaged && process.env.VITE_DEV === "1";
 let mainWindow;
 
 const projects = createProjectStore({ isTempImportPath });
+const jobs = createJobManager();
+const imports = createImportStore();
+const approvedCloses = new WeakSet();
+const pendingCloses = new WeakMap();
 const handle = (channel, handler) => registerRequest(ipcMain, channel, handler);
 
 function createWindow() {
@@ -54,7 +62,27 @@ function createWindow() {
   });
 
   mainWindow.on('closed', () => {
+    clearTimeout(pendingCloses.get(window));
+    pendingCloses.delete(window);
     mainWindow = null;
+  });
+  const owner = mainWindow.webContents.id;
+  const window = mainWindow;
+  window.on('close', event => {
+    void jobs.cancelOwner(owner);
+    if (approvedCloses.has(window)) return;
+    // Keep the renderer alive while it flushes. Async work in beforeunload can be suspended.
+    event.preventDefault();
+    if (pendingCloses.has(window)) return;
+    pendingCloses.set(window, setTimeout(() => {
+      pendingCloses.delete(window);
+      // A renderer that cannot acknowledge close cannot finish a project flush either.
+      if (!window.isDestroyed()) window.destroy();
+    }, 7000));
+    if (!window.webContents.isDestroyed()) window.webContents.send('closeRequested');
+  });
+  mainWindow.webContents.once('destroyed', () => {
+    void jobs.cancelOwner(owner).then(() => imports.cleanupOwner(owner));
   });
 }
 
@@ -81,11 +109,23 @@ app.on('window-all-closed', () => {
   }
 });
 
-app.on('will-quit', async () => {
-  // Clean up temp directory
-  try { await fs.rm(TEMP_IMPORT_DIR, { recursive: true, force: true }); } catch {}
-  // Delete project files marked for deletion
-  await projects.cleanupOnExit();
+let shutdownComplete = false;
+let shutdownPending = false;
+app.on('will-quit', event => {
+  if (shutdownComplete) return;
+  event.preventDefault();
+  if (shutdownPending) return;
+  shutdownPending = true;
+  stopProbes();
+  let timer;
+  void Promise.race([
+    jobs.shutdown().then(() => Promise.allSettled([imports.shutdown(), projects.cleanupOnExit()])),
+    new Promise(resolve => { timer = setTimeout(resolve, 6000); }),
+  ]).finally(() => {
+    clearTimeout(timer);
+    shutdownComplete = true;
+    app.quit();
+  });
 });
 
 app.on('activate', () => {
@@ -95,6 +135,15 @@ app.on('activate', () => {
 });
 
 // IPC Handlers
+handle('closeWindow', (event, approved = true) => {
+  const window = BrowserWindow.fromWebContents(event.sender);
+  if (!window) return;
+  clearTimeout(pendingCloses.get(window));
+  pendingCloses.delete(window);
+  if (!approved) return;
+  approvedCloses.add(window);
+  setTimeout(() => { if (!window.isDestroyed()) window.close(); }, 0);
+});
 
 // File dialog for opening videos
 handle('openVideoDialog', async () => {
@@ -157,7 +206,10 @@ handle('showSaveVideoDialogForSource', async (_e, srcPath) => {
   return res.canceled ? null : res.filePath || null;
 });
 
-handle('importBlob', (_event, bytes, name) => importBlob(bytes, name));
+handle('beginImport', (event, id, name, size) => imports.begin(event.sender.id, id, name, size));
+handle('writeImportChunk', (event, id, offset, bytes) => imports.chunk(event.sender.id, id, offset, bytes));
+handle('finishImport', (event, id) => imports.finish(event.sender.id, id));
+handle('abortImport', (event, id) => imports.abort(event.sender.id, id));
 handle('isTempImport', (_event, source) => isTempImportPath(source));
 handle('moveFile', (_event, source, destination) => moveFile(source, destination));
 handle('projectDefaultPath', (_event, source) => sidecarPathForSource(source));
@@ -171,8 +223,15 @@ handle('projectSetDeleteOnExit', (_event, projectPath, enabled) => projects.setD
 handle('getVideoInfo', (_e, source) => getVideoInfo(source));
 handle('getExportEstimate', (_e, options) => getExportEstimate(options));
 handle('getEncoderCapabilities', () => getEncoderCapabilities());
-handle('exportVideo', (event, options) => exportVideo(options, data => event.sender.send('exportProgress', data)));
-handle('remuxVideo', (event, options) => remuxVideo(options, data => event.sender.send('remuxProgress', data)));
+const mediaJob = (event, options, channel, execute) => {
+  const jobId = options.jobId || randomUUID();
+  return jobs.run(event.sender?.id, jobId, signal => execute(options, data => {
+    if (!event.sender.isDestroyed()) event.sender.send(channel, { ...data, jobId });
+  }, signal));
+};
+handle('cancelMediaJob', (event, jobId) => jobs.cancel(event.sender.id, jobId));
+handle('exportVideo', (event, options) => mediaJob(event, options, 'exportProgress', exportVideo));
+handle('remuxVideo', (event, options) => mediaJob(event, options, 'remuxProgress', remuxVideo));
 
 // File dialog for selecting multiple MKV files for remux
 handle('selectMkvFiles', async () => {

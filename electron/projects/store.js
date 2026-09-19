@@ -51,6 +51,7 @@ export function createProjectStore({ isTempImportPath }) {
       return true;
     },
     async cleanupOnExit() {
+      await Promise.allSettled([...writes.values()]);
       for (const projectPath of deleteOnExit) { try { await fs.unlink(projectPath); } catch {} }
     },
   };

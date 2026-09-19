@@ -12,7 +12,7 @@ interface RemuxItem {
   id: string;
   source: string;
   target: string;
-  status: 'pending' | 'processing' | 'completed' | 'error';
+  status: 'pending' | 'processing' | 'completed' | 'error' | 'cancelled';
   progress: number;
   duration: number;
   error?: string;
@@ -27,6 +27,16 @@ const RemuxModal: React.FC<RemuxModalProps> = ({ onClose }) => {
   const [isRunning, setIsRunning] = useState(false);
   const [queueError, setQueueError] = useState('');
   const running = React.useRef(false);
+  const activeJob = React.useRef<string | null>(null);
+  const cancelRequested = React.useRef(false);
+  const [cancelling, setCancelling] = useState(false);
+  const cancelBatch = async () => {
+    cancelRequested.current = true;
+    setCancelling(true);
+    try {
+      if (activeJob.current) unwrapIpc(await window.electronAPI.cancelMediaJob(activeJob.current));
+    } catch (error) { setQueueError(String(error)); setCancelling(false); }
+  };
   const admitted = React.useRef(new Set<string>());
   const pathKey = (p: string) => {
     const key = p.replace(/\\/g, '/');
@@ -109,14 +119,17 @@ const RemuxModal: React.FC<RemuxModalProps> = ({ onClose }) => {
       setQueueError('Remux requires the ClipForge desktop app.');
       return;
     }
-    const pending = items.filter(item => item.status === 'pending');
+    const pending = items.filter(item => item.status === 'pending' || item.status === 'cancelled');
     if (!pending.length) return;
     running.current = true;
+    cancelRequested.current = false;
+    setCancelling(false);
     setIsRunning(true);
     setQueueError('');
     let unsubscribe: (() => void) | undefined;
     try {
       unsubscribe = window.electronAPI.onRemuxProgress((data: RemuxProgress) => {
+        if (data.jobId !== activeJob.current) return;
         setItems(prev => prev.map(item => {
           if (item.source !== data.inputPath || item.status !== 'processing') return item;
           const percent = data.progress ?? (item.duration > 0 ? data.currentTime / item.duration * 100 : 0);
@@ -124,10 +137,17 @@ const RemuxModal: React.FC<RemuxModalProps> = ({ onClose }) => {
         }));
       });
       for (const item of pending) {
-        setItems(prev => prev.map(row => row.id === item.id ? { ...row, status: 'processing' } : row));
+        if (cancelRequested.current) break;
+        activeJob.current = crypto.randomUUID();
+        setItems(prev => prev.map(row => row.id === item.id ? { ...row, status: 'processing', progress: 0, error: undefined } : row));
         try {
-          const options: RemuxOptions = { inputPath: item.source, outputPath: item.target, duration: item.duration };
+          const options: RemuxOptions = { jobId: activeJob.current, inputPath: item.source, outputPath: item.target, duration: item.duration };
           const result = await window.electronAPI.remuxVideo(options);
+          if (!result.success && result.code === 'CANCELLED') {
+            cancelRequested.current = true;
+            setItems(prev => prev.map(row => row.id === item.id ? { ...row, status: 'cancelled', progress: 0 } : row));
+            break;
+          }
           if (!result.success) throw new Error(result.error);
           setItems(prev => prev.map(row => row.id === item.id ? { ...row, status: 'completed', progress: 100 } : row));
         } catch (error) {
@@ -139,6 +159,8 @@ const RemuxModal: React.FC<RemuxModalProps> = ({ onClose }) => {
       setQueueError(String(error));
     } finally {
       unsubscribe?.();
+      activeJob.current = null;
+      setCancelling(false);
       running.current = false;
       setIsRunning(false);
     }
@@ -158,15 +180,18 @@ const RemuxModal: React.FC<RemuxModalProps> = ({ onClose }) => {
       case 'completed': return 'Completed';
       case 'processing': return 'Running';
       case 'error': return 'Failed';
+      case 'cancelled': return 'Cancelled';
       default: return 'Waiting';
     }
   };
 
   return <Dialog title="Remux recordings" eyebrow="NEW CONTAINER. SAME QUALITY." busy={isRunning} onClose={onClose}
     footer={<><div className="footer-actions"><button onClick={clearFinished} disabled={isRunning || !items.some(item => item.status === 'completed')} className="quiet-button"><Trash2 size={14} />Clear finished</button><button onClick={clearAll} disabled={isRunning || !items.length} className="quiet-button">Clear all</button></div>
-      <button onClick={startRemux} disabled={isRunning || !items.some(item => item.status === 'pending')} className="primary-button"><RefreshCw size={15} />{isRunning ? 'Remuxing...' : 'Remux'}</button></>}>
+      {isRunning && <button onClick={cancelBatch} disabled={cancelling} className="quiet-button">{cancelling ? 'Cancelling...' : 'Cancel batch'}</button>}
+      <button onClick={startRemux} disabled={isRunning || !items.some(item => item.status === 'pending' || item.status === 'cancelled')} className="primary-button"><RefreshCw size={15} />{isRunning ? 'Remuxing...' : 'Remux'}</button></>}>
     <p className="dialog-intro">Repackage MKV recordings as MP4 without re-encoding.<br />Original files stay in place. Outputs are saved beside them.</p>
     {queueError && <p role="alert" className="error-box">{queueError}</p>}
+    {!isRunning && cancelRequested.current && <p role="status">Batch stopped. Completed files are kept; cancelled and waiting files can be retried.</p>}
     <div className={`remux-drop ${isDragging ? 'dragging' : ''}`} onDragOver={handleDragOver} onDragLeave={handleDragLeave} onDrop={handleDrop}>
       <Upload size={22} /><div><strong>Drop your MKV recordings here</strong><span>One file or a whole batch</span></div><button className="secondary-button" onClick={addMkvFiles}>Add files</button>
     </div>

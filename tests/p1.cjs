@@ -22,7 +22,8 @@ test('extracted runner preserves NVENC arguments and export/remux progress', asy
   const commands = [], events = [];
   const loaded = mainContext({
     execFile: (_exe, _args, _options, done) => done(null, '', ''),
-    fs: { lstat: async () => { throw Object.assign(new Error(), { code: 'ENOENT' }); } },
+    fs: { lstat: async () => { throw Object.assign(new Error(), { code: 'ENOENT' }); },
+      mkdtemp: async prefix => prefix + 'unique', link: async () => {}, rm: async () => {} },
     spawn: (_exe, args) => {
       commands.push(args);
       const child = new EventEmitter(); child.stderr = new EventEmitter(); child.stdout = new EventEmitter();

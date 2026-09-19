@@ -2,6 +2,7 @@ const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
 // Keep this allowlist local: a sandboxed preload cannot require application modules.
 const requests = [
+  "closeWindow",
   "openVideoDialog",
   "showOpenProjectDialog",
   "showSaveProjectDialog",
@@ -11,7 +12,11 @@ const requests = [
   "getVideoInfo",
   "getExportEstimate",
   "getEncoderCapabilities",
-  "importBlob",
+  "beginImport",
+  "writeImportChunk",
+  "finishImport",
+  "abortImport",
+  "cancelMediaJob",
   "isTempImport",
   "moveFile",
   "projectDefaultPath",
@@ -37,5 +42,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
   onExportProgress: callback => subscribe('exportProgress', callback),
   onRemuxProgress: callback => subscribe('remuxProgress', callback),
+  onCloseRequested: callback => subscribe('closeRequested', callback),
   platform: process.platform,
 });

@@ -24,7 +24,17 @@ export async function cleanupOldTempFiles() {
         
         // Delete files older than 24 hours
         if (fileAge > 24 * 60 * 60 * 1000) {
-          await fs.unlink(filePath);
+          if (stats.isDirectory()) {
+            if (!file.startsWith('import-')) continue;
+            let owner;
+            try { owner = JSON.parse(await fs.readFile(path.join(filePath, '.owner.json'), 'utf8')); }
+            catch (error) { if (error.code !== 'ENOENT') continue; }
+            if (Number.isSafeInteger(owner?.pid) && owner.pid > 0) {
+              try { process.kill(owner.pid, 0); continue; }
+              catch (error) { if (error.code !== 'ESRCH') continue; }
+            }
+            await fs.rm(filePath, { recursive: true, force: true });
+          } else await fs.unlink(filePath);
           console.log('Cleaned up old temp file:', filePath);
         }
       } catch (error) {
@@ -40,24 +50,6 @@ export async function cleanupOldTempFiles() {
 }
 
 
-export async function importBlob(bytes, name) {
-    await fs.mkdir(TEMP_IMPORT_DIR, { recursive: true });
-    const originalName = String(name || 'drop');
-    const ext = path.extname(originalName) || '';
-    const base = path.basename(originalName, ext) || 'drop';
-    const safeBase = base
-      .replace(/[^\w.\-]+/g, '_')
-      .replace(/_+/g, '_');
-    const safeExt = ext.replace(/[^\w.]+/g, '');
-    const filePath = path.join(TEMP_IMPORT_DIR, `${Date.now()}-${safeBase}${safeExt}`);
-    // bytes may be a Uint8Array or ArrayBuffer – handle both
-    const buf = bytes?.buffer instanceof ArrayBuffer
-    ? Buffer.from(bytes.buffer)
-    : Buffer.from(bytes);
-
-    await fs.writeFile(filePath, buf);
-    return { tempPath: filePath, isTemp: true };
-}
 
 export async function moveFile(src, dst) {
     try { await fs.rename(src, dst); }
