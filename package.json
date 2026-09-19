@@ -1,7 +1,9 @@
 {
-  "name": "vite-react-typescript-starter",
+  "name": "clipforge",
   "private": true,
-  "version": "0.0.0",
+  "version": "0.1.0",
+  "description": "Local desktop video trimming, export, and remux utility.",
+  "author": "Imti-Al",
   "type": "module",
   "scripts": {
   "dev": "concurrently -k \"vite\" \"wait-on http://localhost:5173 && cross-env VITE_DEV=1 electron .\"",
@@ -60,6 +62,11 @@
     ],
     "win": {
       "target": "nsis"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "perMachine": false
     },
     "mac": {
       "target": "dmg"

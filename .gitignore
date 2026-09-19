@@ -12,6 +12,8 @@ dist
 dist-electron
 dist-ssr
 *.local
+/builder-debug.yml
+/builder-effective-config.yaml
 
 # Root-level local media and generated QA output
 /clips/
