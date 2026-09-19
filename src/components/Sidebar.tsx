@@ -82,10 +82,10 @@ const Sidebar: React.FC<SidebarProps> = ({
   return (
     <aside ref={sidebarRef} className="clip-sidebar" style={{ width }} aria-label="Clips and source information">
       <div className="sidebar-resize" onMouseDown={handleResizeStart} title="Drag to resize clip list" />
-      <div className="sidebar-heading"><div><p className="eyebrow">YOUR SELECTIONS</p><h2>Clips <span className="count">{videoInfo ? segments.length : 0}</span></h2></div>
+      <div className="sidebar-heading"><div><p className="eyebrow">SELECTIONS</p><h2>Clips <span className="count">{videoInfo ? segments.length : 0}</span></h2></div>
         <button className="icon-button" onClick={onAddSegment} disabled={!videoInfo || isLoadingVideo} title="Add a clip from current In/Out" aria-label="Add segment"><Plus size={18} /></button>
       </div>
-      <p className="sidebar-hint">Select a clip to adjust its range.<br />Only the active clip is exported.</p>
+      <p className="sidebar-hint">Select a clip to adjust its range.<br />Export the active clip or all clips as separate files.</p>
       <div className="clip-list">
         {videoInfo ? segments.map((segment, index) => {
           const active = segment.id === activeSegmentId;

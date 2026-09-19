@@ -121,6 +121,15 @@ h2 { font-size: 18px; font-weight: 600; }
 .playhead i { position: absolute; top: -2px; left: 1px; width: 9px; height: 7px; background: #f8fbf3; clip-path: polygon(0 0, 100% 0, 100% 50%, 50% 100%, 0 50%); }
 .transport { display: flex; align-items: center; gap: 14px; margin-top: 20px; }
 .transport-play { display: flex; align-items: center; gap: 5px; }
+.preview-volume { position: relative; flex-shrink: 0; }
+.volume-slider { position: absolute; bottom: 100%; left: 0; width: 144px; padding: 12px; background: var(--panel); border: 1px solid var(--line); border-radius: 5px; z-index: 10; visibility: hidden; opacity: 0; pointer-events: none; transition: opacity 100ms ease; }
+.preview-volume:hover .volume-slider, .preview-volume:focus-within .volume-slider { visibility: visible; opacity: 1; pointer-events: auto; }
+.volume-slider input { display: block; width: 100%; accent-color: var(--accent); cursor: pointer; }
+.capability-note { font-size: 11px; color: var(--muted); margin: 10px 0; overflow-wrap: anywhere; }
+.setting-row select { min-width: 0; max-width: 65%; }
+.dialog-footer { flex-wrap: wrap; }
+.dialog-footer .primary-button { margin-left: auto; }
+.advanced-settings p { overflow-wrap: anywhere; }
 .play-button { width: 34px; height: 30px; background: #333b35; color: var(--accent); }
 .play-time { margin-left: 10px; font-size: 12px; white-space: nowrap; }
 .play-time small { color: #7e8b83; font-size: 10px; }

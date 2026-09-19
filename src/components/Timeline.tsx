@@ -3,8 +3,13 @@ import { Play, Pause, ChevronLeft, ChevronRight, Plus, ArrowUpRight } from 'luci
 
 import type { ProjectSegment } from '../types/electron';
 import { unwrapIpc } from '../utils/ipc';
+import VolumeControl from './VolumeControl';
 
 interface TimelineProps {
+  volume?: number;
+  muted?: boolean;
+  onVolumeChange?: (volume: number) => void;
+  onToggleMute?: () => void;
   sourcePath?: string;
   segments?: ProjectSegment[];
   activeSegmentId?: string;
@@ -34,6 +39,7 @@ function snapToFrame(seconds: number, fps: number): number {
 
 const Timeline: React.FC<TimelineProps> = ({
   sourcePath,
+  volume = 1, muted = false, onVolumeChange, onToggleMute,
   segments = [], activeSegmentId, onSelectSegment, onAddSegment,
   currentTime,
   inTime,
@@ -53,6 +59,37 @@ const Timeline: React.FC<TimelineProps> = ({
 
   const trackRef = React.useRef<HTMLDivElement>(null);
   const [drag, setDrag] = React.useState<null | 'playhead' | 'in' | 'out'>(null);
+  const wheelState = React.useRef({ remainder: 0, last: 0, fine: false, position: currentTime, playing: isPlaying });
+  wheelState.current.position = currentTime;
+  wheelState.current.playing = isPlaying;
+  React.useEffect(() => {
+    const track = trackRef.current;
+    if (!track) return;
+    const wheel = (event: WheelEvent) => {
+      if (duration <= 0) return;
+      event.preventDefault(); event.stopPropagation();
+      if (drag || event.buttons || event.ctrlKey || event.metaKey || event.altKey) return;
+      const delta = (Math.abs(event.deltaX) > Math.abs(event.deltaY) ? event.deltaX : event.deltaY)
+        * (event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? 100 : 1);
+      if (!delta) return;
+      const state = wheelState.current;
+      if (event.timeStamp - state.last > 200 || state.fine !== event.shiftKey || Math.sign(delta) !== Math.sign(state.remainder)) state.remainder = 0;
+      state.last = event.timeStamp; state.fine = event.shiftKey;
+      let next;
+      if (event.shiftKey) {
+        state.remainder += delta;
+        const frames = Math.trunc(state.remainder / 100);
+        state.remainder -= frames * 100;
+        if (!frames) return;
+        next = snapToFrame(state.position, fps) + frames / fps;
+      } else next = state.position + delta / 100 * Math.max(0.25, Math.min(10, duration / 100));
+      if (state.playing) { state.playing = false; onPlayPause(); }
+      state.position = Math.max(0, Math.min(duration, next));
+      onCurrentTimeChange(state.position);
+    };
+    track.addEventListener('wheel', wheel, { passive: false });
+    return () => track.removeEventListener('wheel', wheel);
+  }, [drag, duration, fps, isPlaying, onCurrentTimeChange, onPlayPause]);
   const [keyframes, setKeyframes] = React.useState<number[]>([]);
   const [keyframeNote, setKeyframeNote] = React.useState('');
   React.useEffect(() => {
@@ -211,7 +248,7 @@ const Timeline: React.FC<TimelineProps> = ({
         {segments.map((segment, index) => <button key={segment.id} className={`clip-tab ${segment.id === activeSegmentId ? 'active' : ''}`} aria-pressed={segment.id === activeSegmentId} onClick={() => onSelectSegment?.(segment.id)} title={segment.name}>Clip {String(index + 1).padStart(2, '0')}</button>)}
         <button className="icon-button" onClick={onAddSegment} disabled={!enabled} title="Add clip from current range" aria-label="Add clip"><Plus size={14} /></button>
       </div>
-      <span className="timeline-help" title={keyframeNote}>Drag edges to trim <span> / </span> Shift for free positioning{keyframes.length > 0 ? ' / Keyframe ticks near IN' : ''}</span>
+      <span className="timeline-help" title={`Drag edges to trim; Shift-drag disables frame snapping. ${keyframeNote}`}>Wheel to seek / Shift + wheel: frames{keyframes.length > 0 ? ' / Keyframe ticks near IN' : ''}</span>
     </div>
     <div className="timeline-ruler" aria-hidden="true">{[0, 1, 2, 3, 4].map(i => <span key={i}>{formatTime(duration * i / 4).slice(0, 8)}</span>)}</div>
     <div ref={trackRef} className={`timeline-track ${enabled ? '' : 'empty'}`}>
@@ -236,6 +273,7 @@ const Timeline: React.FC<TimelineProps> = ({
         <button className="icon-button" onClick={() => handleFrameStep('backward')} disabled={!enabled} title="Previous frame (,)" aria-label="Previous frame"><ChevronLeft size={18} /></button>
         <button className="play-button" onClick={onPlayPause} disabled={!enabled} title="Play / pause (Space)" aria-label={isPlaying ? 'Pause' : 'Play'}>{isPlaying ? <Pause size={17} /> : <Play size={17} />}</button>
         <button className="icon-button" onClick={() => handleFrameStep('forward')} disabled={!enabled} title="Next frame (.)" aria-label="Next frame"><ChevronRight size={18} /></button>
+        {onVolumeChange && onToggleMute && <VolumeControl volume={volume} muted={muted} onChange={onVolumeChange} onToggle={onToggleMute} />}
         <span className="play-time mono">{formatTime(currentTime)}<small> / {formatTime(duration)}</small></span>
       </div>
       <div className="range-inputs">
@@ -245,7 +283,7 @@ const Timeline: React.FC<TimelineProps> = ({
         <label className="time-field"><button onClick={() => onOutTimeChange(currentTime)} disabled={!enabled} title="Set out at playhead (O)">OUT</button>
           <input aria-label="Out point" value={outText} disabled={!enabled} onChange={e => setOutText(e.target.value)} onBlur={commitOut} onKeyDown={e => { if (e.key === 'Enter') commitOut(); if (e.key === 'Escape') setOutText(formatTime(outTime)); }} /></label>
       </div>
-      <button className="primary-button export-clip" onClick={onExport} disabled={!enabled || outTime <= inTime} title="Export only the active clip">Export clip <ArrowUpRight size={16} /></button>
+      <button className="primary-button export-clip" onClick={onExport} disabled={!enabled || outTime <= inTime} title="Export the active clip or all clips">Export <ArrowUpRight size={16} /></button>
     </div>
   </section>;
 };

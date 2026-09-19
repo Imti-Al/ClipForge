@@ -19,6 +19,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({ onClose, videoSrc, inT
     codec: 'h264' as VideoCodec, encoderId: 'libx264', method: 'encode' as 'encode' | 'copy', scope: 'active',
   });
   const [encoders, setEncoders] = useState<EncoderCapability[]>([]);
+  const [checkingEncoders, setCheckingEncoders] = useState(true);
   const [capabilityNote, setCapabilityNote] = useState('Checking encoders...');
   const [isExporting, setIsExporting] = useState(false);
   const [cancelling, setCancelling] = useState(false);
@@ -47,11 +48,13 @@ export const ExportModal: React.FC<ExportModalProps> = ({ onClose, videoSrc, inT
   useEffect(() => {
     let active = true;
     setEncoders([]);
+    setCheckingEncoders(true);
     setCapabilityNote('Checking encoders on this device...');
-    if (!window.electronAPI) { setCapabilityNote('Encoder checks require the desktop app.'); return; }
+    if (!window.electronAPI) { setCapabilityNote('Encoder checks require the desktop app.'); setCheckingEncoders(false); return; }
     window.electronAPI.getEncoderCapabilities(options.codec).then(unwrapIpc).then(result => {
       if (!active) return;
       setEncoders(result.encoders);
+      setCheckingEncoders(false);
       setCapabilityNote(result.encoders.filter(item => item.reason).map(item => item.label + ': ' + item.reason).join('\n'));
       setOptions(previous => {
         if (running.current) return previous;
@@ -62,7 +65,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({ onClose, videoSrc, inT
         if (chosen.id === previous.encoderId) return mode === previous.mode ? previous : { ...previous, mode };
         return { ...previous, mode, encoderId: chosen.id, crfValue: chosen.quality.default, preset: chosen.defaultPreset };
       });
-    }).catch(error => { if (active) setCapabilityNote(String(error)); });
+    }).catch(error => { if (active) { setCapabilityNote(String(error)); setCheckingEncoders(false); } });
     return () => { active = false; };
   }, [options.codec]);
 
@@ -107,8 +110,8 @@ export const ExportModal: React.FC<ExportModalProps> = ({ onClose, videoSrc, inT
         }
         if (!active) return;
         setEstimatedSize('~' + (estimates.reduce((sum, item) => sum + item.expectedBytes, 0) / 1000000).toFixed(2) + ' MB total');
-        setEstimateNote('Budget includes audio, mux overhead and a safety reserve. ' +
-          (encoder?.twoPass ? 'CPU x264 uses two passes.' : 'Single-pass rate control is approximate and may undershoot substantially.') +
+        setEstimateNote('Includes audio and container overhead, with room to stay below the target. ' +
+          (encoder?.twoPass ? 'CPU x264 uses two passes for closer sizing.' : 'This encoder uses one pass; actual size can differ substantially.') +
           (selected.length > 1 ? ' The target applies to each clip separately.' : ''));
       } catch (error) { if (active) { setEstimatedSize('Unavailable'); setEstimateNote(String(error)); } }
     }, 250);
@@ -188,9 +191,9 @@ export const ExportModal: React.FC<ExportModalProps> = ({ onClose, videoSrc, inT
   const resumable = !!pending.current?.length;
   const validEncoder = options.method === 'copy' || !!encoder?.modes[options.mode];
 
-  return <Dialog title="Export clips" eyebrow="MAKE IT READY TO SHARE" busy={isExporting} onClose={onClose}
+  return <Dialog title="Export clips" eyebrow="EXPORT SETTINGS" busy={isExporting} onClose={onClose}
     footer={<>
-      <span className="footer-note"><strong>{estimatedSize}</strong><small>{options.method === 'copy' ? 'Keyframe-constrained, not frame-exact.' : 'Your source file stays untouched.'}</small></span>
+      <span className="footer-note"><strong>{options.scope === 'all' ? `${clips.length} separate files` : 'Active clip only'}</strong><small>{options.method === 'copy' ? 'Keyframe-constrained, not frame-exact.' : 'Source file unchanged.'}</small></span>
       {isExporting && <button onClick={cancelExport} disabled={cancelling} className="quiet-button">{cancelling ? 'Cancelling...' : 'Cancel'}</button>}
       <button onClick={handleExport} disabled={isExporting || !options.outputPath || !validEncoder || (!plan && !resumable) || !!planError || (!!pending.current && !resumable)}
         className="primary-button"><Play size={15} />{isExporting ? 'Exporting...' : resumable ? 'Resume remaining' : 'Start Export'}</button>
@@ -199,20 +202,23 @@ export const ExportModal: React.FC<ExportModalProps> = ({ onClose, videoSrc, inT
     {exportError && <div role="alert" className="error-box">{exportError}</div>}
     {status && <p role="status">{status}</p>}
     <fieldset disabled={isExporting} hidden={isExporting} className="export-settings">
-      <div className="setting-row"><label htmlFor="export-scope">Selection</label><select id="export-scope" value={options.scope} onChange={event => setOptions(previous => ({ ...previous, scope: event.target.value }))}>
+      <div className="setting-row"><label htmlFor="export-scope">Clips to export</label><select id="export-scope" value={options.scope} onChange={event => setOptions(previous => ({ ...previous, scope: event.target.value }))}>
         <option value="active">Active clip</option><option value="all" disabled={segments.length < 2}>All clips as separate files ({segments.length})</option></select></div>
       <div className="mode-choices" aria-label="Export method">
         <button type="button" className={options.method === 'encode' ? 'selected' : ''} aria-pressed={options.method === 'encode'} onClick={() => setOptions(previous => ({ ...previous, method: 'encode' }))}><strong>Exact</strong><span>Re-encode for precise video cuts</span></button>
-        <button type="button" className={options.method === 'copy' ? 'selected' : ''} aria-pressed={options.method === 'copy'} onClick={() => setOptions(previous => ({ ...previous, method: 'copy' }))}><strong>Fast / lossless</strong><span>Copy streams at keyframe boundaries</span></button>
+        <button type="button" className={options.method === 'copy' ? 'selected' : ''} aria-pressed={options.method === 'copy'} onClick={() => setOptions(previous => ({ ...previous, method: 'copy' }))}><strong>Fast copy</strong><span>No re-encoding; cuts may shift</span></button>
       </div>
       {options.method === 'encode' ? <>
         <div className="setting-row"><label htmlFor="export-codec">Video codec</label><select id="export-codec" value={options.codec} onChange={event => setOptions(previous => ({ ...previous, codec: event.target.value as VideoCodec }))}>
           <option value="h264">H.264 / most compatible</option><option value="hevc">HEVC / H.265</option><option value="av1">AV1</option></select></div>
-        <div className="setting-row"><div><label htmlFor="export-encoder">Encoder</label><p>Only tested encoders are selectable. Output is 8-bit 4:2:0.</p></div>
-          <select id="export-encoder" value={options.encoderId} disabled={!encoders.length} onChange={event => chooseEncoder(event.target.value)}>
-            {!encoders.length && <option value={options.encoderId}>Checking device...</option>}
+        <div className="setting-row"><div><label htmlFor="export-encoder">Encoder</label><p>Software (CPU) or supported graphics hardware.</p></div>
+          <select id="export-encoder" value={options.encoderId} disabled={!encoders.some(item => item.available)} onChange={event => chooseEncoder(event.target.value)}>
+            {!encoders.length && <option value={options.encoderId}>{checkingEncoders ? 'Checking device...' : 'Unavailable'}</option>}
             {encoders.map(item => <option key={item.id} value={item.id} disabled={!item.available}>{item.label}{item.available ? '' : ' (unavailable)'}</option>)}
           </select></div>
+        {checkingEncoders ? <p role="status" className="capability-note">Checking encoders on this device...</p> : !encoders.some(item => item.available) ?
+          <p role="status" className="error-box">No encoder is available for this codec. Choose another codec or use Fast copy.</p> : encoder && (!encoder.modes.crf || !encoder.modes.target) ?
+            <p className="capability-note">This encoder supports {encoder.modes.crf ? 'Quality' : 'Target size'} mode only on this device.</p> : null}
         {capabilityNote && <details className="capability-note"><summary>Encoder availability</summary><p style={{ whiteSpace: 'pre-wrap' }}>{capabilityNote}</p></details>}
         <div className="mode-choices" aria-label="Compression mode">
           <button type="button" disabled={!encoder?.modes.crf} className={options.mode === 'crf' ? 'selected' : ''} aria-pressed={options.mode === 'crf'} onClick={() => setOptions(previous => ({ ...previous, mode: 'crf' }))}><strong>Quality</strong><span>Variable filesize</span></button>
@@ -220,12 +226,12 @@ export const ExportModal: React.FC<ExportModalProps> = ({ onClose, videoSrc, inT
         </div>
         <div className="setting-row">{options.mode === 'crf' ? <>
           <div><label htmlFor="quality">Quality level / {encoder?.quality.label || 'quality'}</label><p>Lower values retain more detail. Scales differ between encoders.</p></div>
-          <input id="quality" className="number-input" type="number" min={encoder?.quality.min} max={encoder?.quality.max} value={options.crfValue} onChange={event => setOptions(previous => ({ ...previous, crfValue: Number(event.target.value) }))} />
+          <input id="quality" className="number-input" type="number" disabled={!encoder?.modes.crf} min={encoder?.quality.min} max={encoder?.quality.max} value={options.crfValue} onChange={event => setOptions(previous => ({ ...previous, crfValue: Number(event.target.value) }))} />
         </> : <>
-          <div><label htmlFor="target-size">Final file budget per clip</label><p>Includes audio. {encoder?.twoPass ? 'Two-pass x264.' : 'Approximate single-pass rate control.'}</p></div>
+          <div><label htmlFor="target-size">Target file size per clip</label><p>Includes audio. {encoder?.twoPass ? 'Two passes for closer sizing.' : 'Approximate; actual size varies.'}</p></div>
           <div className="input-unit"><input id="target-size" className="number-input" type="number" min="1" max="100000" value={options.targetSize} onChange={event => setOptions(previous => ({ ...previous, targetSize: Number(event.target.value) }))} /><span>MB</span></div>
         </>}</div>
-      </> : <p className="dialog-intro">Fast export expands IN backward and OUT forward to nearby keyframes. Audio packets, open GOPs and timestamps can shift the result further; use Exact for precise video cuts. Compatible audio tracks and subtitles are copied, not compressed. Chapters are omitted.</p>}
+      </> : <div className="dialog-intro"><p>Copies video without quality loss. The start moves back and the end moves forward to nearby keyframes. Use Exact for precise video cuts.</p><details><summary>Timing and included tracks</summary><p>Audio and video timing can shift the result beyond these boundaries. Compatible audio tracks and subtitles are copied; chapters are omitted. Review the output ranges below.</p></details></div>}
       <div className="destination-section">
         <label htmlFor="export-name">{options.scope === 'all' ? 'Batch filename prefix' : 'File name'}</label>
         <div className="destination-row"><input id="export-name" value={options.filename} onChange={event => {
@@ -238,8 +244,9 @@ export const ExportModal: React.FC<ExportModalProps> = ({ onClose, videoSrc, inT
         <div className="destination-row"><input id="export-path" value={options.outputPath} onChange={event => setOptions(previous => ({ ...previous, outputPath: event.target.value }))} placeholder="Choose where to save" /><button className="secondary-button" onClick={browse}><Folder size={15} />Browse</button></div>
       </div>
       {options.method === 'encode' && <details className="advanced-settings"><summary>Advanced settings <ChevronDown size={14} /></summary>
+        <p className="capability-note">Video output is 8-bit 4:2:0. Preview volume does not affect exported audio.</p>
         <div className="setting-row"><div><label htmlFor="preset">Encoder preset</label><p>{encoder?.id === 'libsvtav1' ? 'Lower numbers are slower.' : encoder?.id.includes('nvenc') ? 'P1 is fastest; P7 uses more effort.' : 'Encoder-specific speed and quality tradeoff.'}</p></div>
-          <select id="preset" value={options.preset} onChange={event => setOptions(previous => ({ ...previous, preset: event.target.value }))}>{encoder?.presets.map(preset => <option key={preset} value={preset}>{preset}</option>)}</select></div>
+          <select id="preset" disabled={!encoder?.available} value={options.preset} onChange={event => setOptions(previous => ({ ...previous, preset: event.target.value }))}>{encoder?.presets.map(preset => <option key={preset} value={preset}>{preset}</option>)}</select></div>
         <label className="check-row"><input type="checkbox" checked={options.copyAudio} onChange={event => setOptions(previous => ({ ...previous, copyAudio: event.target.checked }))} /><span>Copy first audio track<small>Otherwise encode AAC at 128 kb/s. Exact export includes the first video/audio track.</small></span></label>
       </details>}
       {planError && <p role="alert" className="error-box">{planError}</p>}

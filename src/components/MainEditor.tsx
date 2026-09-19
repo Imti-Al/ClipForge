@@ -128,6 +128,15 @@ const MainEditor: React.FC<MainEditorProps> = ({
   // Sidebar state
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [sidebarWidth, setSidebarWidth] = useState(320); // Default width in pixels
+  const [previewAudio, setPreviewAudio] = useState({ volume: 1, muted: false, lastAudible: 1 });
+  const changeVolume = useCallback((value: number) => {
+    const volume = Math.max(0, Math.min(1, value));
+    setPreviewAudio(previous => ({ volume, muted: volume === 0, lastAudible: volume > 0 ? volume : previous.lastAudible }));
+  }, []);
+  const toggleMute = useCallback(() => setPreviewAudio(previous =>
+    previous.muted || previous.volume === 0
+      ? { ...previous, muted: false, volume: previous.volume || previous.lastAudible }
+      : { ...previous, muted: true }), []);
 
   /* ---- Guard so <video>.onloadedmetadata doesn't overwrite restored state ---- */
   const suppressNextMetadataInit = React.useRef(false);
@@ -627,7 +636,11 @@ const MainEditor: React.FC<MainEditorProps> = ({
         handleSaveProject();
         return;
       }
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
       switch (e.code) {
+        case 'KeyM': e.preventDefault(); toggleMute(); break;
+        case 'ArrowUp': e.preventDefault(); changeVolume((previewAudio.muted ? 0 : previewAudio.volume) + 0.05); break;
+        case 'ArrowDown': e.preventDefault(); changeVolume((previewAudio.muted ? 0 : previewAudio.volume) - 0.05); break;
         case 'Space': e.preventDefault(); setIsPlaying(p => !p); break;
         case 'Comma': e.preventDefault(); handleFrameStep('backward'); break;
         case 'Period': e.preventDefault(); handleFrameStep('forward'); break;
@@ -639,7 +652,7 @@ const MainEditor: React.FC<MainEditorProps> = ({
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [currentTime, handleFrameStep, handleSaveProject, handleSeek, setInForActive, setOutForActive, isModalOpen]);
+  }, [currentTime, handleFrameStep, handleSaveProject, handleSeek, setInForActive, setOutForActive, isModalOpen, previewAudio, changeVolume, toggleMute]);
 
   const previewSession = sessionRef.current;
   const handleTimeUpdate = (time: number) => {
@@ -715,7 +728,7 @@ const MainEditor: React.FC<MainEditorProps> = ({
 
       <div className="workspace-status">
         <span className="source-name" title={currentVideoPath}>{currentVideoPath ? currentVideoPath.split(/[/\\]/).pop() : 'No source selected'}</span>
-        <span className="save-status" title={currentProjectPath || undefined}>{isLoadingVideo ? 'Reading source...' : !videoSrc ? 'Local files. No uploads.' : hasUnsavedChanges ? 'Unsaved changes' : currentProjectPath ? 'Project saved' : 'Ready'}</span>
+        <span className="save-status" title={currentProjectPath || undefined}>{isLoadingVideo ? 'Reading source...' : !videoSrc ? 'No video open' : hasUnsavedChanges ? 'Unsaved changes' : currentProjectPath ? 'Project saved' : 'Ready'}</span>
       </div>
       {projectError && <div role="alert" className="notice error-notice">{projectError}</div>}
       {showSaveBanner && !isSaveBannerDismissed && <div className="notice">
@@ -730,6 +743,8 @@ const MainEditor: React.FC<MainEditorProps> = ({
             isLoading={isLoadingVideo}
             onOpen={handleLoadVideo}
             isPlaying={isPlaying}
+            volume={previewAudio.volume}
+            muted={previewAudio.muted}
             videoSrc={videoSrc}
             currentTime={currentTime}
             onTimeUpdate={handleTimeUpdate}
@@ -759,6 +774,10 @@ const MainEditor: React.FC<MainEditorProps> = ({
       <div className="timeline-region">
         <Timeline
           sourcePath={currentVideoPath}
+          volume={previewAudio.volume}
+          muted={previewAudio.muted}
+          onVolumeChange={changeVolume}
+          onToggleMute={toggleMute}
           segments={videoSrc ? segments : []}
           activeSegmentId={activeSegmentId}
           onSelectSegment={handleSelectSegment}

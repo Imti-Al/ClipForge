@@ -77,6 +77,18 @@ function editor(api) {
   };
 }
 
+test('preview volume shortcuts preserve mute level across sources without changing project preferences', async () => {
+  const app=editor(tempApi());
+  app.key('ArrowDown'); assert.equal(app.props('VideoPreview').volume,0.95);
+  app.key('KeyM'); assert.equal(app.props('VideoPreview').muted,true);
+  app.key('KeyM'); assert.equal(app.props('VideoPreview').volume,0.95); assert.equal(app.props('VideoPreview').muted,false);
+  app.props('Timeline').onVolumeChange(0); app.key('KeyM'); assert.equal(app.props('VideoPreview').volume,0.95);
+  app.setModalOpen(true); app.key('ArrowDown'); app.key('KeyM');
+  assert.equal(app.props('VideoPreview').volume,0.95); assert.equal(app.props('VideoPreview').muted,false);
+  app.setModalOpen(false); await app.props('MenuBar').onLoadVideo();
+  assert.equal(app.props('VideoPreview').volume,0.95);
+});
+
 test('rapid A to B opens suppress stale metadata, errors, and old preview callbacks', async () => {
   for (const fails of [false, true]) {
     let resolveA, rejectA, count = 0;

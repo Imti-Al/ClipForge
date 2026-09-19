@@ -36,6 +36,43 @@ test('paused preview applies a single 60fps frame seek and tracks playback end',
   assert.equal(video.currentTime,1/60);
   const tree=render({...props,isPlaying:true,currentTime:1/60},{video});
   tree.find(n=>n.type==='video').props.onEnded(); assert.equal(ended,1);
+  render({...props,volume:0.25,muted:true},{video});
+  assert.equal(video.volume,0.25); assert.equal(video.muted,true);
+});
+
+test('timeline wheel accumulates fine deltas, clamps seeking and pauses only once per burst', () => {
+  let wheel, seeks = [], pauses = 0, prevented = 0;
+  const track = { addEventListener(name, fn, options) { if (name === 'wheel') { wheel = fn; assert.equal(options.passive,false); } }, removeEventListener() {} };
+  const render = component('Timeline');
+  const props = { currentTime:5,inTime:0,outTime:20,duration:20,isPlaying:true,fps:60,formatTime:String,
+    onCurrentTimeChange:t=>seeks.push(t),onPlayPause:()=>pauses++,onInTimeChange(){},onOutTimeChange(){},onExport(){} };
+  render(props,{div:track});
+  const event = (deltaY, shiftKey=false, extra={}) => ({deltaY,deltaX:0,deltaMode:0,shiftKey,timeStamp:10,buttons:0,preventDefault(){prevented++;},stopPropagation(){},...extra});
+  for (let i=0;i<10;i++) wheel(event(10,true));
+  assert.equal(seeks.length,1); assert.equal(seeks[0],5+1/60);
+  wheel(event(100,true)); assert.equal(pauses,1); assert.ok(Math.abs(seeks[1]-(5+2/60))<1e-10);
+  wheel(event(-100)); assert.ok(Math.abs(seeks.at(-1)-(5+2/60-0.25))<1e-10);
+  const count=seeks.length; wheel(event(100,false,{buttons:1})); assert.equal(seeks.length,count);
+  wheel(event(100000)); assert.equal(seeks.at(-1),20);
+  wheel(event(-100000)); assert.equal(seeks.at(-1),0); assert.ok(prevented>0);
+  render({...props,currentTime:5,isPlaying:false},{div:track});
+  wheel(event(3,false,{deltaMode:1})); assert.equal(seeks.at(-1),5.12);
+});
+
+test('volume wheel is local, bounded and works from mute; native slider remains accessible', () => {
+  let wheel, stopped=0, value, toggles=0;
+  const element={addEventListener(name,fn,options){wheel=fn;assert.equal(options.passive,false);},removeEventListener(){}};
+  const render=component('VolumeControl');
+  const props={volume:0.5,muted:false,onChange:v=>value=v,onToggle:()=>toggles++};
+  const tree=render(props,{div:element});
+  const event=deltaY=>({deltaY,deltaMode:0,preventDefault(){},stopPropagation(){stopped++;}});
+  wheel(event(-100)); assert.equal(value,0.55);
+  wheel(event(-100000)); assert.equal(value,1);
+  wheel(event(100000)); assert.equal(value,0); assert.equal(stopped,3);
+  render({...props,muted:true},{div:element}); wheel(event(-100)); assert.equal(value,0.05);
+  const slider=tree.find(node=>node.type==='input'); assert.equal(slider.props.type,'range');
+  slider.props.onChange({target:{value:'42'}}); assert.equal(value,0.42);
+  tree.find(node=>node.type==='button').props.onClick(); assert.equal(toggles,1);
 });
 
 test('timeline exposes active clip and supports keyboard range editing without crossing bounds', () => {

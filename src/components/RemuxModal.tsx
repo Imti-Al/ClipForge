@@ -185,7 +185,7 @@ const RemuxModal: React.FC<RemuxModalProps> = ({ onClose }) => {
     }
   };
 
-  return <Dialog title="Remux recordings" eyebrow="NEW CONTAINER. SAME QUALITY." busy={isRunning} onClose={onClose}
+  return <Dialog title="Remux recordings" eyebrow="MKV TO MP4" busy={isRunning} onClose={onClose}
     footer={<><div className="footer-actions"><button onClick={clearFinished} disabled={isRunning || !items.some(item => item.status === 'completed')} className="quiet-button"><Trash2 size={14} />Clear finished</button><button onClick={clearAll} disabled={isRunning || !items.length} className="quiet-button">Clear all</button></div>
       {isRunning && <button onClick={cancelBatch} disabled={cancelling} className="quiet-button">{cancelling ? 'Cancelling...' : 'Cancel batch'}</button>}
       <button onClick={startRemux} disabled={isRunning || !items.some(item => item.status === 'pending' || item.status === 'cancelled')} className="primary-button"><RefreshCw size={15} />{isRunning ? 'Remuxing...' : 'Remux'}</button></>}>
@@ -193,11 +193,11 @@ const RemuxModal: React.FC<RemuxModalProps> = ({ onClose }) => {
     {queueError && <p role="alert" className="error-box">{queueError}</p>}
     {!isRunning && cancelRequested.current && <p role="status">Batch stopped. Completed files are kept; cancelled and waiting files can be retried.</p>}
     <div className={`remux-drop ${isDragging ? 'dragging' : ''}`} onDragOver={handleDragOver} onDragLeave={handleDragLeave} onDrop={handleDrop}>
-      <Upload size={22} /><div><strong>Drop your MKV recordings here</strong><span>One file or a whole batch</span></div><button className="secondary-button" onClick={addMkvFiles}>Add files</button>
+      <Upload size={22} /><div><strong>Drop MKV files here</strong><span>Add one or more recordings</span></div><button className="secondary-button" onClick={addMkvFiles}>Add files</button>
     </div>
     <div className="remux-list-heading"><span>RECORDINGS</span><span>{items.length} {items.length === 1 ? 'file' : 'files'}</span></div>
     <div className="remux-list">
-      {!items.length && <p className="remux-empty">Nothing queued yet. Add a recording to get started.</p>}
+      {!items.length && <p className="remux-empty">No recordings added.</p>}
       {items.map(item => <article key={item.id} className="remux-item">
         <div className="remux-paths"><span title={item.source}>{item.source.split(/[/\\]/).pop()}</span><ArrowRight size={13} /><span title={item.target}>{item.target.split(/[/\\]/).pop()}</span></div>
         <div className="remux-state"><span className={getStatusColor(item.status)}>{getStatusText(item.status)}</span><span className="mono">{item.status === 'processing' ? item.duration > 0 ? `${item.progress}%` : 'Duration unavailable' : item.status === 'completed' ? '100%' : ''}</span></div>

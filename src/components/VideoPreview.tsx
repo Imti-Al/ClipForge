@@ -3,6 +3,8 @@ import { Play, FolderOpen, Film, Loader2 } from 'lucide-react';
 
 interface VideoPreviewProps {
   isPlaying: boolean;
+  volume?: number;
+  muted?: boolean;
   isLoading?: boolean;
   onOpen?: () => void;
   videoSrc?: string;
@@ -14,6 +16,8 @@ interface VideoPreviewProps {
 
 const VideoPreview: React.FC<VideoPreviewProps> = ({ 
   isPlaying, 
+  volume = 1,
+  muted = false,
   videoSrc, 
   currentTime, 
   onTimeUpdate, 
@@ -25,6 +29,12 @@ const VideoPreview: React.FC<VideoPreviewProps> = ({
   const [error, setError] = useState('');
   useEffect(() => setError(''), [videoSrc]);
   const videoRef = useRef<HTMLVideoElement>(null);
+  useEffect(() => {
+    if (videoRef.current) {
+      videoRef.current.volume = volume;
+      videoRef.current.muted = muted;
+    }
+  }, [volume, muted, videoSrc]);
 
   // Control play/pause based on isPlaying prop
   useEffect(() => {
@@ -89,9 +99,9 @@ const VideoPreview: React.FC<VideoPreviewProps> = ({
         {error && <div role="alert" className="preview-error">{error}</div>}
       </> : <div className="empty-stage">
         <div className="empty-film"><Film size={34} strokeWidth={1.2} /><span className="corner top-left" /><span className="corner bottom-right" /></div>
-        <p className="eyebrow">LESS EDITING. MORE SHARING.</p>
-        <h1>Just the part you want.</h1>
-        <p>Drop a video. Find your moment.<br />Trim it down and make it fit.</p>
+        <p className="eyebrow">CLIPFORGE</p>
+        <h1>Open a video</h1>
+        <p>Select clips, trim and compress them.<br />All processing stays on your device.</p>
         <button className="primary-button" onClick={onOpen}><FolderOpen size={16} />Open video</button>
         <span className="empty-footnote">Or drop a local video anywhere in the workspace</span>
         <div className="empty-steps"><span><b>01</b> Select</span><span><b>02</b> Trim</span><span><b>03</b> Export</span></div>
