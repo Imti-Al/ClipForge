@@ -2,8 +2,10 @@ import React from 'react';
 import { Play, Pause, ChevronLeft, ChevronRight, Plus, ArrowUpRight } from 'lucide-react';
 
 import type { ProjectSegment } from '../types/electron';
+import { unwrapIpc } from '../utils/ipc';
 
 interface TimelineProps {
+  sourcePath?: string;
   segments?: ProjectSegment[];
   activeSegmentId?: string;
   onSelectSegment?: (id: string) => void;
@@ -31,6 +33,7 @@ function snapToFrame(seconds: number, fps: number): number {
 }
 
 const Timeline: React.FC<TimelineProps> = ({
+  sourcePath,
   segments = [], activeSegmentId, onSelectSegment, onAddSegment,
   currentTime,
   inTime,
@@ -50,6 +53,19 @@ const Timeline: React.FC<TimelineProps> = ({
 
   const trackRef = React.useRef<HTMLDivElement>(null);
   const [drag, setDrag] = React.useState<null | 'playhead' | 'in' | 'out'>(null);
+  const [keyframes, setKeyframes] = React.useState<number[]>([]);
+  const [keyframeNote, setKeyframeNote] = React.useState('');
+  React.useEffect(() => {
+    setKeyframes([]);
+    if (!sourcePath || !window.electronAPI?.getKeyframes) return;
+    let active = true;
+    const timer = setTimeout(() => {
+      window.electronAPI.getKeyframes(sourcePath, inTime).then(unwrapIpc).then(result => {
+        if (active) { setKeyframes(result.times); setKeyframeNote('Keyframe ticks near IN; fast export adjusts to keyframe boundaries.'); }
+      }).catch(() => { if (active) setKeyframeNote('Keyframes unavailable; exact export is still available.'); });
+    }, 400);
+    return () => { active = false; clearTimeout(timer); };
+  }, [sourcePath, inTime]);
 
   const parseTimecode = React.useCallback((raw: string): number | null => {
     const s = raw.trim();
@@ -195,7 +211,7 @@ const Timeline: React.FC<TimelineProps> = ({
         {segments.map((segment, index) => <button key={segment.id} className={`clip-tab ${segment.id === activeSegmentId ? 'active' : ''}`} aria-pressed={segment.id === activeSegmentId} onClick={() => onSelectSegment?.(segment.id)} title={segment.name}>Clip {String(index + 1).padStart(2, '0')}</button>)}
         <button className="icon-button" onClick={onAddSegment} disabled={!enabled} title="Add clip from current range" aria-label="Add clip"><Plus size={14} /></button>
       </div>
-      <span className="timeline-help">Drag edges to trim <span> / </span> Shift for free positioning</span>
+      <span className="timeline-help" title={keyframeNote}>Drag edges to trim <span> / </span> Shift for free positioning{keyframes.length > 0 ? ' / Keyframe ticks near IN' : ''}</span>
     </div>
     <div className="timeline-ruler" aria-hidden="true">{[0, 1, 2, 3, 4].map(i => <span key={i}>{formatTime(duration * i / 4).slice(0, 8)}</span>)}</div>
     <div ref={trackRef} className={`timeline-track ${enabled ? '' : 'empty'}`}>
@@ -204,6 +220,8 @@ const Timeline: React.FC<TimelineProps> = ({
       <div className="range-fill" style={{ left: `${inPercentage}%`, width: `${Math.max(0, outPercentage - inPercentage)}%` }}>
         {enabled && <span>CLIP {String(activeIndex + 1).padStart(2, '0')} <span className="range-duration">{formatTime(outTime - inTime)}</span></span>}
       </div>
+      {keyframes.filter((_, index) => index % Math.max(1, Math.ceil(keyframes.length / 40)) === 0).map(time =>
+        <i key={time} aria-hidden="true" style={{ position: 'absolute', pointerEvents: 'none', left: `${time / safeDuration * 100}%`, bottom: 0, height: 6, width: 1, background: 'var(--accent)', opacity: 0.55 }} />)}
       {enabled && <>
         <div role="slider" aria-label="Trim in" aria-valuemin={0} aria-valuemax={outTime} aria-valuenow={inTime} aria-valuetext={formatTime(inTime)} tabIndex={0}
           className="trim-handle in-handle" style={{ left: `${inPercentage}%` }} onPointerDown={startDrag('in')} onKeyDown={e => sliderKey('in', e)} title="In point: drag or use arrow keys"><span /></div>

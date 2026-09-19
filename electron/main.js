@@ -10,6 +10,8 @@ import { cleanSafeFile } from './paths.js';
 import { getVideoInfo } from './media/probe.js';
 import { exportVideo, getExportEstimate } from './media/export.js';
 import { getEncoderCapabilities } from './media/capabilities.js';
+import { getKeyframes } from './media/keyframes.js';
+import { getExportPlan } from './media/exportPlan.js';
 import { remuxVideo } from './media/remux.js';
 import { app, BrowserWindow, ipcMain, dialog, protocol } from 'electron';
 import path from 'node:path';
@@ -222,7 +224,9 @@ handle('projectSetDeleteOnExit', (_event, projectPath, enabled) => projects.setD
 // Media services report progress through the existing renderer channels.
 handle('getVideoInfo', (_e, source) => getVideoInfo(source));
 handle('getExportEstimate', (_e, options) => getExportEstimate(options));
-handle('getEncoderCapabilities', () => getEncoderCapabilities());
+handle('getEncoderCapabilities', (_event, codec) => getEncoderCapabilities(codec));
+handle('getKeyframes', (_event, source, time) => getKeyframes(source, time));
+handle('getExportPlan', (_event, options) => getExportPlan(options));
 const mediaJob = (event, options, channel, execute) => {
   const jobId = options.jobId || randomUUID();
   return jobs.run(event.sender?.id, jobId, signal => execute(options, data => {

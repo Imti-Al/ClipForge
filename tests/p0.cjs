@@ -59,6 +59,7 @@ test('MKV selects matroska and all outputs use no-overwrite; unsupported contain
   const { EventEmitter } = require('node:events');
   const commands = [];
   const loaded = mainContext({
+    execFile: (_exe, _args, _options, done) => done(null, '', ''),
     fs: { lstat: async () => { throw Object.assign(new Error('absent'), { code: 'ENOENT' }); },
       mkdtemp: async prefix => prefix + 'unique', link: async () => {}, rm: async () => {} },
     spawn: (exe, args) => { commands.push(args); const child = new EventEmitter(); child.stderr = new EventEmitter(); child.stdout = new EventEmitter(); queueMicrotask(() => child.emit('close', 0)); return child; },

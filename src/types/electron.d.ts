@@ -27,8 +27,10 @@ export interface ElectronAPI {
   moveFile: (src: string, dst: string) => Promise<IpcResult<{ dst: string }>>;
   
   // Export operations
-  getExportEstimate: (options: Pick<ExportOptions, 'inputPath' | 'duration' | 'targetSize' | 'copyAudio' | 'useGPU'>) => Promise<IpcResult<ExportEstimate>>;
-  getEncoderCapabilities: () => Promise<IpcResult<{ nvenc: boolean; reason: string }>>;
+  getExportEstimate: (options: Pick<ExportOptions, 'inputPath' | 'duration' | 'targetSize' | 'copyAudio' | 'useGPU' | 'encoderId'>) => Promise<IpcResult<ExportEstimate>>;
+  getEncoderCapabilities: (codec?: VideoCodec) => Promise<IpcResult<{ encoders: EncoderCapability[]; nvenc: boolean; reason: string }>>;
+  getKeyframes: (source: string, time: number) => Promise<IpcResult<{ times: number[]; start: number; end: number; duration: number }>>;
+  getExportPlan: (options: { inputPath: string; outputPath: string; containerFormat: string; clips: ProjectSegment[]; method: 'encode' | 'copy' }) => Promise<IpcResult<ExportPlanItem[]>>;
   exportVideo: (options: ExportOptions) => Promise<IpcResult<{ outputPath: string }>>;
   onExportProgress: (callback: (data: ExportProgress) => void) => () => void;
   
@@ -69,6 +71,8 @@ export interface VideoInfo {
 }
 
 export interface ExportOptions {
+  encoderId?: string;
+  method?: 'encode' | 'copy';
   jobId: string;
   inputPath: string;
   outputPath: string;
@@ -81,6 +85,30 @@ export interface ExportOptions {
   preset: string;
   useGPU: boolean;
   copyAudio: boolean;
+}
+
+export type VideoCodec = 'h264' | 'hevc' | 'av1';
+export interface EncoderCapability {
+  id: string;
+  codec: VideoCodec;
+  label: string;
+  hardware: boolean;
+  quality: { label: string; min: number; max: number; default: number };
+  presets: string[];
+  defaultPreset: string;
+  twoPass: boolean;
+  available: boolean;
+  modes: { crf: boolean; target: boolean };
+  reason: string;
+}
+export interface ExportPlanItem {
+  outputPath: string;
+  name: string;
+  startTime: number;
+  duration: number;
+  actualStart: number;
+  actualEnd: number;
+  omitted: string[];
 }
 
 export interface ExportEstimate {

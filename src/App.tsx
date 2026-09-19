@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import { useCallback, useState } from 'react';
+import type { ProjectSegment } from './types/electron';
 import MainEditor from './components/MainEditor';
 import { ExportModal } from './components/ExportModal';
 import RemuxModal from './components/RemuxModal';
@@ -9,7 +10,11 @@ function App() {
   const [activeModal, setActiveModal] = useState<ModalType>(null);
   const [videoSrc, setVideoSrc] = useState<string>('');
   const [inTime, setInTime] = useState(0);
-  const [outTime, setOutTime] = useState(600);
+  const [outTime, setOutTime] = useState(0);
+  const [segments, setSegments] = useState<ProjectSegment[]>([]);
+  const updateVideo = useCallback((src: string, _duration: number, inT: number, outT: number, clips: ProjectSegment[]) => {
+    setVideoSrc(src); setInTime(inT); setOutTime(outT); setSegments(clips);
+  }, []);
 
   const handleCloseModal = () => {
     setActiveModal(null);
@@ -29,11 +34,7 @@ function App() {
         isModalOpen={activeModal !== null}
         onOpenExport={handleOpenExport}
         onOpenRemux={handleOpenRemux}
-        onVideoStateChange={(src, _duration, inT, outT) => {
-          setVideoSrc(src);
-          setInTime(inT);
-          setOutTime(outT);
-        }}
+        onVideoStateChange={updateVideo}
       />
       
       {activeModal === 'export' && (
@@ -42,6 +43,7 @@ function App() {
           videoSrc={videoSrc}
           inTime={inTime}
           outTime={outTime}
+          segments={segments}
         />
       )}
       

@@ -12,6 +12,8 @@ const requests = [
   "getVideoInfo",
   "getExportEstimate",
   "getEncoderCapabilities",
+  "getKeyframes",
+  "getExportPlan",
   "beginImport",
   "writeImportChunk",
   "finishImport",

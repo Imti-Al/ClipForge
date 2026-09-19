@@ -107,14 +107,15 @@ test('NVENC capability initializes the encoder once; failures prevent GPU export
   let probes = 0;
   const h = harness({ execFile: (_exe, args, opts, done) => {
     if (args.includes('-show_streams')) return done(null, JSON.stringify(audioInfo));
+    if (!args.includes('h264_nvenc')) return done(null, '', '');
     probes++; assert.equal(opts.timeout, 10000); assert.ok(args.includes('color=size=640x360:rate=30'));
     done(new Error('no device'), '', 'No capable devices found');
   } });
   const service = h.load('media/capabilities.js');
-  const results = await Promise.all([service.getEncoderCapabilities(), service.getEncoderCapabilities()]);
-  assert.equal(probes, 1); assert.equal(results[0].nvenc, false);
-  await assert.rejects(h.load('media/export.js').exportVideo({ ...settings, useGPU: true }), /Use CPU/);
-  assert.equal(h.children.length, 0); assert.equal(probes, 1);
+  const results = await Promise.all([service.getEncoderCapability('h264_nvenc'), service.getEncoderCapability('h264_nvenc')]);
+  assert.equal(probes, 2); assert.equal(results[0].available, false);
+  await assert.rejects(h.load('media/export.js').exportVideo({ ...settings, useGPU: true }), /unavailable/);
+  assert.equal(h.children.length, 0); assert.equal(probes, 2);
   const cpu = h.load('media/export.js').exportVideo({ ...settings, mode: 'crf' });
   await tick(); h.children[0].emit('close', 0); await cpu;
 });

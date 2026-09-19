@@ -12,7 +12,7 @@ interface MainEditorProps {
   isModalOpen?: boolean;
   onOpenExport: () => void;
   onOpenRemux: () => void;
-  onVideoStateChange: (src: string, duration: number, inTime: number, outTime: number) => void;
+  onVideoStateChange: (src: string, duration: number, inTime: number, outTime: number, segments: ProjectData['segments']) => void;
 }
 
 /* ---------------- Drag/drop helpers ---------------- */
@@ -584,8 +584,8 @@ const MainEditor: React.FC<MainEditorProps> = ({
 
   /* ---------------- Parent sync ---------------- */
   useEffect(() => {
-    onVideoStateChange(videoSrc, duration, inTime, outTime);
-  }, [videoSrc, duration, inTime, outTime, onVideoStateChange]);
+    onVideoStateChange(videoSrc, duration, inTime, outTime, segments);
+  }, [videoSrc, duration, inTime, outTime, segments, onVideoStateChange]);
 
   /* ---------------- Player callbacks ---------------- */
   const formatTime = useCallback((seconds: number): string => {
@@ -758,6 +758,7 @@ const MainEditor: React.FC<MainEditorProps> = ({
 
       <div className="timeline-region">
         <Timeline
+          sourcePath={currentVideoPath}
           segments={videoSrc ? segments : []}
           activeSegmentId={activeSegmentId}
           onSelectSegment={handleSelectSegment}
