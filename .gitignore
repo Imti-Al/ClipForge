@@ -13,6 +13,14 @@ dist-electron
 dist-ssr
 *.local
 
+# Root-level local media and generated QA output
+/clips/
+/recordings/
+/smoke-media/
+/screenshots/
+/reports/
+/artifacts/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
